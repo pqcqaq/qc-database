@@ -1,180 +1,14 @@
 #include "cache/storage/wal.h"
-#include <sstream>
-#include <iomanip>
+#include <fstream>
+#include <algorithm>
 #include <filesystem>
+#include <cstring>
+#include <crc32c/crc32c.h>
 
 namespace cache {
 namespace storage {
 
-// CRC32 lookup table
-static const uint32_t crc32_table[256] = {
-    0x00000000, 0x77073096, 0xee0e612c, 0x990951ba, 0x076dc419, 0x706af48f,
-    0xe963a535, 0x9e6495a3, 0x0edb8832, 0x79dcb8a4, 0xe0d5e91e, 0x97d2d988,
-    0x09b64c2b, 0x7eb17cbd, 0xe7b82d07, 0x90bf1d91, 0x1db71064, 0x6ab020f2,
-    0xf3b97148, 0x84be41de, 0x1adad47d, 0x6ddde4eb, 0xf4d4b551, 0x83d385c7,
-    0x136c9856, 0x646ba8c0, 0xfd62f97a, 0x8a65c9ec, 0x14015c4f, 0x63066cd9,
-    0xfa0f3d63, 0x8d080df5, 0x3b6e20c8, 0x4c69105e, 0xd56041e4, 0xa2677172,
-    0x3c03e4d1, 0x4b04d447, 0xd20d85fd, 0xa50ab56b, 0x35b5a8fa, 0x42b2986c,
-    0xdbbbc9d6, 0xacbcf940, 0x32d86ce3, 0x45df5c75, 0xdcd60dcf, 0xabd13d59,
-    0x26d930ac, 0x51de003a, 0xc8d75180, 0xbfd06116, 0x21b4f4b5, 0x56b3c423,
-    0xcfba9599, 0xb8bda50f, 0x2802b89e, 0x5f058808, 0xc60cd9b2, 0xb10be924,
-    0x2f6f7c87, 0x58684c11, 0xc1611dab, 0xb6662d3d, 0x76dc4190, 0x01db7106,
-    0x98d220bc, 0xefd5102a, 0x71b18589, 0x06b6b51f, 0x9fbfe4a5, 0xe8b8d433,
-    0x7807c9a2, 0x0f00f934, 0x9609a88e, 0xe10e9818, 0x7f6a0dbb, 0x086d3d2d,
-    0x91646c97, 0xe6635c01, 0x6b6b51f4, 0x1c6c6162, 0x856530d8, 0xf262004e,
-    0x6c0695ed, 0x1b01a57b, 0x8208f4c1, 0xf50fc457, 0x65b0d9c6, 0x12b7e950,
-    0x8bbeb8ea, 0xfcb9887c, 0x62dd1ddf, 0x15da2d49, 0x8cd37cf3, 0xfbd44c65,
-    0x4db26158, 0x3ab551ce, 0xa3bc0074, 0xd4bb30e2, 0x4adfa541, 0x3dd895d7,
-    0xa4d1c46d, 0xd3d6f4fb, 0x4369e96a, 0x346ed9fc, 0xad678846, 0xda60b8d0,
-    0x44042d73, 0x33031de5, 0xaa0a4c5f, 0xdd0d7cc9, 0x5005713c, 0x270241aa,
-    0xbe0b1010, 0xc90c2086, 0x5768b525, 0x206f85b3, 0xb966d409, 0xce61e49f,
-    0x5edef90e, 0x29d9c998, 0xb0d09822, 0xc7d7a8b4, 0x59b33d17, 0x2eb40d81,
-    0xb7bd5c3b, 0xc0ba6cad, 0xedb88320, 0x9abfb3b6, 0x03b6e20c, 0x74b1d29a,
-    0xead54739, 0x9dd277af, 0x04db2615, 0x73dc1683, 0xe3630b12, 0x94643b84,
-    0x0d6d6a3e, 0x7a6a5aa8, 0xe40ecf0b, 0x9309ff9d, 0x0a00ae27, 0x7d079eb1,
-    0xf00f9344, 0x8708a3d2, 0x1e01f268, 0x6906c2fe, 0xf762575d, 0x806567cb,
-    0x196c3671, 0x6e6b06e7, 0xfed41b76, 0x89d32be0, 0x10da7a5a, 0x67dd4acc,
-    0xf9b9df6f, 0x8ebeeff9, 0x17b7be43, 0x60b08ed5, 0xd6d6a3e8, 0xa1d1937e,
-    0x38d8c2c4, 0x4fdff252, 0xd1bb67f1, 0xa6bc5767, 0x3fb506dd, 0x48b2364b,
-    0xd80d2bda, 0xaf0a1b4c, 0x36034af6, 0x41047a60, 0xdf60efc3, 0xa867df55,
-    0x316e8eef, 0x4669be79, 0xcb61b38c, 0xbc66831a, 0x256fd2a0, 0x5268e236,
-    0xcc0c7795, 0xbb0b4703, 0x220216b9, 0x5505262f, 0xc5ba3bbe, 0xb2bd0b28,
-    0x2bb45a92, 0x5cb36a04, 0xc2d7ffa7, 0xb5d0cf31, 0x2cd99e8b, 0x5bdeae1d,
-    0x9b64c2b0, 0xec63f226, 0x756aa39c, 0x026d930a, 0x9c0906a9, 0xeb0e363f,
-    0x72076785, 0x05005713, 0x95bf4a82, 0xe2b87a14, 0x7bb12bae, 0x0cb61b38,
-    0x92d28e9b, 0xe5d5be0d, 0x7cdcefb7, 0x0bdbdf21, 0x86d3d2d4, 0xf1d4e242,
-    0x68ddb3f8, 0x1fda836e, 0x81be16cd, 0xf6b9265b, 0x6fb077e1, 0x18b74777,
-    0x88085ae6, 0xff0f6a70, 0x66063bca, 0x11010b5c, 0x8f659eff, 0xf862ae69,
-    0x616bffd3, 0x166ccf45, 0xa00ae278, 0xd70dd2ee, 0x4e048354, 0x3903b3c2,
-    0xa7672661, 0xd06016f7, 0x4969474d, 0x3e6e77db, 0xaed16a4a, 0xd9d65adc,
-    0x40df0b66, 0x37d83bf0, 0xa9bcae53, 0xdebb9ec5, 0x47b2cf7f, 0x30b5ffe9,
-    0xbdbdf21c, 0xcabac28a, 0x53b39330, 0x24b4a3a6, 0xbad03605, 0xcdd70693,
-    0x54de5729, 0x23d967bf, 0xb3667a2e, 0xc4614ab8, 0x5d681b02, 0x2a6f2b94,
-    0xb40bbe37, 0xc30c8ea1, 0x5a05df1b, 0x2d02ef8d
-};
-
-void WALEntry::calculate_checksum() {
-    // Serialize entry data for checksum calculation
-    std::string data = serialize();
-    
-    // Calculate CRC32 checksum
-    uint32_t crc = 0xFFFFFFFF;
-    for (char c : data) {
-        crc = crc32_table[(crc ^ c) & 0xFF] ^ (crc >> 8);
-    }
-    checksum = crc ^ 0xFFFFFFFF;
-}
-
-bool WALEntry::verify_checksum() const {
-    WALEntry temp = *this;
-    temp.checksum = 0;
-    temp.calculate_checksum();
-    return temp.checksum == checksum;
-}
-
-std::string WALEntry::serialize() const {
-    std::ostringstream oss;
-    
-    // Entry type (1 byte)
-    oss << static_cast<uint8_t>(type);
-    
-    // Sequence number (8 bytes)
-    oss.write(reinterpret_cast<const char*>(&sequence_number), sizeof(sequence_number));
-    
-    // Primary key length and data
-    uint32_t pk_len = key.primary_key.length();
-    oss.write(reinterpret_cast<const char*>(&pk_len), sizeof(pk_len));
-    oss << key.primary_key;
-    
-    // Secondary key length and data
-    uint32_t sk_len = key.secondary_key.length();
-    oss.write(reinterpret_cast<const char*>(&sk_len), sizeof(sk_len));
-    oss << key.secondary_key;
-    
-    // Data entry (for PUT operations)
-    if (type == WALEntryType::PUT) {
-        // Value length and data
-        uint32_t val_len = data.value.length();
-        oss.write(reinterpret_cast<const char*>(&val_len), sizeof(val_len));
-        oss << data.value;
-        
-        // Version and timestamp
-        oss.write(reinterpret_cast<const char*>(&data.version), sizeof(data.version));
-        auto timestamp_ms = data.timestamp.count();
-        oss.write(reinterpret_cast<const char*>(&timestamp_ms), sizeof(timestamp_ms));
-        
-        // Deleted flag
-        oss << static_cast<uint8_t>(data.deleted);
-    }
-    
-    // Checksum (4 bytes) - will be calculated separately
-    oss.write(reinterpret_cast<const char*>(&checksum), sizeof(checksum));
-    
-    return oss.str();
-}
-
-Result<WALEntry> WALEntry::deserialize(const std::string& data) {
-    std::istringstream iss(data);
-    WALEntry entry;
-    
-    try {
-        // Entry type
-        uint8_t type_byte;
-        iss.read(reinterpret_cast<char*>(&type_byte), 1);
-        entry.type = static_cast<WALEntryType>(type_byte);
-        
-        // Sequence number
-        iss.read(reinterpret_cast<char*>(&entry.sequence_number), sizeof(entry.sequence_number));
-        
-        // Primary key
-        uint32_t pk_len;
-        iss.read(reinterpret_cast<char*>(&pk_len), sizeof(pk_len));
-        entry.key.primary_key.resize(pk_len);
-        iss.read(&entry.key.primary_key[0], pk_len);
-        
-        // Secondary key
-        uint32_t sk_len;
-        iss.read(reinterpret_cast<char*>(&sk_len), sizeof(sk_len));
-        entry.key.secondary_key.resize(sk_len);
-        iss.read(&entry.key.secondary_key[0], sk_len);
-        
-        // Data entry (for PUT operations)
-        if (entry.type == WALEntryType::PUT) {
-            // Value
-            uint32_t val_len;
-            iss.read(reinterpret_cast<char*>(&val_len), sizeof(val_len));
-            entry.data.value.resize(val_len);
-            iss.read(&entry.data.value[0], val_len);
-            
-            // Version and timestamp
-            iss.read(reinterpret_cast<char*>(&entry.data.version), sizeof(entry.data.version));
-            uint64_t timestamp_ms;
-            iss.read(reinterpret_cast<char*>(&timestamp_ms), sizeof(timestamp_ms));
-            entry.data.timestamp = Timestamp(timestamp_ms);
-            
-            // Deleted flag
-            uint8_t deleted_flag;
-            iss.read(reinterpret_cast<char*>(&deleted_flag), 1);
-            entry.data.deleted = (deleted_flag != 0);
-        }
-        
-        // Checksum
-        iss.read(reinterpret_cast<char*>(&entry.checksum), sizeof(entry.checksum));
-        
-        // Verify checksum
-        if (!entry.verify_checksum()) {
-            return Result<WALEntry>(Status::STORAGE_ERROR, "WAL entry checksum mismatch");
-        }
-        
-        return Result<WALEntry>(Status::OK, entry);
-        
-    } catch (const std::exception& e) {
-        return Result<WALEntry>(Status::STORAGE_ERROR, "Failed to deserialize WAL entry: " + std::string(e.what()));
-    }
-}
-
-WAL::WAL(const std::string& wal_file)
-    : wal_file_(wal_file), is_open_(false), sequence_number_(0) {
+WAL::WAL(const std::string& filename) : filename_(filename), is_open_(false) {
 }
 
 WAL::~WAL() {
@@ -190,44 +24,38 @@ Result<void> WAL::open() {
         return Result<void>(Status::OK);
     }
     
-    // Ensure directory exists
-    std::filesystem::path wal_path(wal_file_);
-    std::filesystem::create_directories(wal_path.parent_path());
-    
-    // Open file for read/write, create if doesn't exist
-    file_ = std::make_unique<std::fstream>(wal_file_, 
-        std::ios::in | std::ios::out | std::ios::binary | std::ios::app);
-    
-    if (!file_->is_open()) {
-        // Try creating the file
-        file_ = std::make_unique<std::fstream>(wal_file_, 
-            std::ios::in | std::ios::out | std::ios::binary | std::ios::trunc);
+    try {
+        // 确保目录存在
+        std::filesystem::path file_path(filename_);
+        std::filesystem::create_directories(file_path.parent_path());
         
-        if (!file_->is_open()) {
-            return Result<void>(Status::STORAGE_ERROR, "Failed to open WAL file: " + wal_file_);
-        }
-    }
-    
-    // Seek to end to get file size and determine next sequence number
-    file_->seekg(0, std::ios::end);
-    if (file_->tellg() > 0) {
-        // File has content, replay to find the last sequence number
-        file_->seekg(0, std::ios::beg);
-        
-        auto replay_result = replay_from(0);
-        if (replay_result.is_ok()) {
-            const auto& entries = replay_result.data;
-            if (!entries.empty()) {
-                sequence_number_ = entries.back().sequence_number + 1;
+        // 以追加模式打开文件
+        file_.open(filename_, std::ios::binary | std::ios::in | std::ios::out);
+        if (!file_.is_open()) {
+            // 文件不存在，创建新文件
+            file_.open(filename_, std::ios::binary | std::ios::out);
+            if (!file_.is_open()) {
+                return Result<void>(Status::STORAGE_ERROR, "Failed to create WAL file: " + filename_);
             }
+            file_.close();
+            file_.open(filename_, std::ios::binary | std::ios::in | std::ios::out);
         }
+        
+        if (!file_.is_open()) {
+            return Result<void>(Status::STORAGE_ERROR, "Failed to open WAL file: " + filename_);
+        }
+        
+        // 移动到文件末尾准备追加
+        file_.seekp(0, std::ios::end);
+        current_offset_ = file_.tellp();
+        
+        is_open_ = true;
+        
+        return Result<void>(Status::OK);
+        
+    } catch (const std::exception& e) {
+        return Result<void>(Status::STORAGE_ERROR, "Failed to open WAL: " + std::string(e.what()));
     }
-    
-    // Position at end for appending
-    file_->seekp(0, std::ios::end);
-    is_open_ = true;
-    
-    return Result<void>(Status::OK);
 }
 
 Result<void> WAL::close() {
@@ -237,13 +65,19 @@ Result<void> WAL::close() {
         return Result<void>(Status::OK);
     }
     
-    if (file_) {
-        file_->flush();
-        file_->close();
+    try {
+        if (file_.is_open()) {
+            file_.flush();
+            file_.close();
+        }
+        
+        is_open_ = false;
+        
+        return Result<void>(Status::OK);
+        
+    } catch (const std::exception& e) {
+        return Result<void>(Status::STORAGE_ERROR, "Failed to close WAL: " + std::string(e.what()));
     }
-    
-    is_open_ = false;
-    return Result<void>(Status::OK);
 }
 
 Result<void> WAL::append(const WALEntry& entry) {
@@ -253,12 +87,32 @@ Result<void> WAL::append(const WALEntry& entry) {
         return Result<void>(Status::STORAGE_ERROR, "WAL is not open");
     }
     
-    // Set sequence number
-    WALEntry numbered_entry = entry;
-    numbered_entry.sequence_number = sequence_number_++;
-    numbered_entry.calculate_checksum();
-    
-    return write_entry(numbered_entry);
+    try {
+        // 序列化WAL条目
+        std::vector<uint8_t> serialized_entry;
+        auto serialize_result = serialize_entry(entry, serialized_entry);
+        if (!serialize_result.is_ok()) {
+            return serialize_result;
+        }
+        
+        // 计算CRC32校验和
+        uint32_t crc = crc32c::Crc32c(serialized_entry.data(), serialized_entry.size());
+        
+        // 写入记录头：记录长度 + CRC + 记录数据
+        uint32_t record_length = serialized_entry.size();
+        
+        file_.write(reinterpret_cast<const char*>(&record_length), sizeof(record_length));
+        file_.write(reinterpret_cast<const char*>(&crc), sizeof(crc));
+        file_.write(reinterpret_cast<const char*>(serialized_entry.data()), serialized_entry.size());
+        
+        // 更新当前偏移
+        current_offset_ = file_.tellp();
+        
+        return Result<void>(Status::OK);
+        
+    } catch (const std::exception& e) {
+        return Result<void>(Status::STORAGE_ERROR, "Failed to append to WAL: " + std::string(e.what()));
+    }
 }
 
 Result<void> WAL::sync() {
@@ -268,55 +122,24 @@ Result<void> WAL::sync() {
         return Result<void>(Status::STORAGE_ERROR, "WAL is not open");
     }
     
-    file_->flush();
-    return Result<void>(Status::OK);
-}
-
-Result<void> WAL::truncate(uint64_t sequence_number) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    
-    if (!is_open_) {
-        return Result<void>(Status::STORAGE_ERROR, "WAL is not open");
-    }
-    
-    // Read all entries up to the sequence number
-    file_->seekg(0, std::ios::beg);
-    std::vector<WALEntry> entries_to_keep;
-    
-    while (file_->good() && !file_->eof()) {
-        auto entry_result = read_entry();
-        if (!entry_result.is_ok()) {
-            break;
-        }
+    try {
+        file_.flush();
         
-        if (entry_result.data.sequence_number < sequence_number) {
-            entries_to_keep.push_back(entry_result.data);
-        }
+        // 在某些系统上可能需要调用fsync
+        #ifdef __linux__
+        int fd = -1;
+        // 获取文件描述符并调用fsync
+        // 这里简化处理，实际实现可能需要更复杂的文件描述符管理
+        #endif
+        
+        return Result<void>(Status::OK);
+        
+    } catch (const std::exception& e) {
+        return Result<void>(Status::STORAGE_ERROR, "Failed to sync WAL: " + std::string(e.what()));
     }
-    
-    // Rewrite the file with only the entries to keep
-    file_->close();
-    file_ = std::make_unique<std::fstream>(wal_file_, 
-        std::ios::out | std::ios::binary | std::ios::trunc);
-    
-    for (const auto& entry : entries_to_keep) {
-        auto write_result = write_entry(entry);
-        if (!write_result.is_ok()) {
-            return write_result;
-        }
-    }
-    
-    file_->flush();
-    
-    // Reopen for append
-    file_->close();
-    file_ = std::make_unique<std::fstream>(wal_file_, 
-        std::ios::in | std::ios::out | std::ios::binary | std::ios::app);
-    
-    return Result<void>(Status::OK);
 }
 
-Result<std::vector<WALEntry>> WAL::replay_from(uint64_t sequence_number) {
+Result<std::vector<WALEntry>> WAL::replay_from(uint64_t offset) {
     std::lock_guard<std::mutex> lock(mutex_);
     
     if (!is_open_) {
@@ -325,106 +148,281 @@ Result<std::vector<WALEntry>> WAL::replay_from(uint64_t sequence_number) {
     
     std::vector<WALEntry> entries;
     
-    // Save current position
-    auto current_pos = file_->tellg();
-    
-    // Start from beginning
-    file_->seekg(0, std::ios::beg);
-    
-    while (file_->good() && !file_->eof()) {
-        auto entry_result = read_entry();
-        if (!entry_result.is_ok()) {
-            // End of valid entries
-            break;
+    try {
+        file_.seekg(offset);
+        
+        while (file_.good() && file_.tellg() < current_offset_) {
+            // 读取记录头
+            uint32_t record_length;
+            uint32_t expected_crc;
+            
+            file_.read(reinterpret_cast<char*>(&record_length), sizeof(record_length));
+            if (file_.gcount() != sizeof(record_length)) {
+                break; // 文件结束
+            }
+            
+            file_.read(reinterpret_cast<char*>(&expected_crc), sizeof(expected_crc));
+            if (file_.gcount() != sizeof(expected_crc)) {
+                break; // 文件结束或损坏
+            }
+            
+            // 检查记录长度的合理性
+            if (record_length > MAX_RECORD_SIZE) {
+                return Result<std::vector<WALEntry>>(Status::STORAGE_ERROR, 
+                    "Invalid record length in WAL: " + std::to_string(record_length));
+            }
+            
+            // 读取记录数据
+            std::vector<uint8_t> record_data(record_length);
+            file_.read(reinterpret_cast<char*>(record_data.data()), record_length);
+            if (static_cast<uint32_t>(file_.gcount()) != record_length) {
+                return Result<std::vector<WALEntry>>(Status::STORAGE_ERROR, 
+                    "Incomplete record in WAL");
+            }
+            
+            // 验证CRC
+            uint32_t actual_crc = crc32c::Crc32c(record_data.data(), record_data.size());
+            if (actual_crc != expected_crc) {
+                return Result<std::vector<WALEntry>>(Status::STORAGE_ERROR, 
+                    "CRC mismatch in WAL record");
+            }
+            
+            // 反序列化WAL条目
+            WALEntry entry;
+            auto deserialize_result = deserialize_entry(record_data, entry);
+            if (!deserialize_result.is_ok()) {
+                return Result<std::vector<WALEntry>>(deserialize_result.status, 
+                    deserialize_result.error_message);
+            }
+            
+            entries.push_back(entry);
         }
         
-        if (entry_result.data.sequence_number >= sequence_number) {
-            entries.push_back(entry_result.data);
-        }
+        return Result<std::vector<WALEntry>>(Status::OK, entries);
+        
+    } catch (const std::exception& e) {
+        return Result<std::vector<WALEntry>>(Status::STORAGE_ERROR, 
+            "Failed to replay WAL: " + std::string(e.what()));
     }
-    
-    // Restore position
-    file_->seekg(current_pos);
-    
-    return Result<std::vector<WALEntry>>(Status::OK, entries);
 }
 
-size_t WAL::file_size() const {
+Result<void> WAL::truncate_from(uint64_t offset) {
     std::lock_guard<std::mutex> lock(mutex_);
     
-    if (!is_open_ || !file_) {
-        return 0;
+    if (!is_open_) {
+        return Result<void>(Status::STORAGE_ERROR, "WAL is not open");
     }
     
-    auto current_pos = file_->tellg();
-    file_->seekg(0, std::ios::end);
-    auto size = file_->tellg();
-    file_->seekg(current_pos);
-    
-    return static_cast<size_t>(size);
+    try {
+        // 关闭当前文件
+        file_.close();
+        
+        // 重新打开文件进行截断
+        std::fstream temp_file(filename_, std::ios::binary | std::ios::in | std::ios::out);
+        if (!temp_file.is_open()) {
+            return Result<void>(Status::STORAGE_ERROR, "Failed to reopen WAL for truncation");
+        }
+        
+        // 读取要保留的数据
+        temp_file.seekg(0);
+        std::vector<char> data(offset);
+        temp_file.read(data.data(), offset);
+        temp_file.close();
+        
+        // 重新创建文件并写入保留的数据
+        std::ofstream output_file(filename_, std::ios::binary | std::ios::trunc);
+        if (!output_file.is_open()) {
+            return Result<void>(Status::STORAGE_ERROR, "Failed to truncate WAL file");
+        }
+        
+        if (offset > 0) {
+            output_file.write(data.data(), offset);
+        }
+        output_file.close();
+        
+        // 重新打开文件
+        file_.open(filename_, std::ios::binary | std::ios::in | std::ios::out);
+        if (!file_.is_open()) {
+            return Result<void>(Status::STORAGE_ERROR, "Failed to reopen WAL after truncation");
+        }
+        
+        file_.seekp(0, std::ios::end);
+        current_offset_ = file_.tellp();
+        
+        return Result<void>(Status::OK);
+        
+    } catch (const std::exception& e) {
+        return Result<void>(Status::STORAGE_ERROR, "Failed to truncate WAL: " + std::string(e.what()));
+    }
 }
 
-Result<void> WAL::write_entry(const WALEntry& entry) {
+uint64_t WAL::size() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return current_offset_;
+}
+
+bool WAL::is_open() const {
+    return is_open_;
+}
+
+// 私有方法实现
+
+Result<void> WAL::serialize_entry(const WALEntry& entry, std::vector<uint8_t>& buffer) {
     try {
-        std::string serialized = entry.serialize();
+        buffer.clear();
         
-        // Write entry size first
-        uint32_t entry_size = serialized.length();
-        file_->write(reinterpret_cast<const char*>(&entry_size), sizeof(entry_size));
+        // 序列化格式：
+        // 1. Entry type (1 byte)
+        // 2. Primary key length (4 bytes) + Primary key
+        // 3. Secondary key length (4 bytes) + Secondary key  
+        // 4. Value length (4 bytes) + Value
+        // 5. Version (8 bytes)
+        // 6. Timestamp (8 bytes)
+        // 7. Deleted flag (1 byte)
         
-        // Write entry data
-        file_->write(serialized.c_str(), serialized.length());
+        // Entry type
+        uint8_t type_byte = static_cast<uint8_t>(entry.type);
+        buffer.push_back(type_byte);
         
-        if (file_->fail()) {
-            return Result<void>(Status::STORAGE_ERROR, "Failed to write WAL entry");
+        // Primary key
+        std::string primary_key = entry.key.primary_key;
+        uint32_t primary_key_length = primary_key.size();
+        append_bytes(buffer, reinterpret_cast<const uint8_t*>(&primary_key_length), sizeof(primary_key_length));
+        append_bytes(buffer, reinterpret_cast<const uint8_t*>(primary_key.c_str()), primary_key_length);
+        
+        // Secondary key
+        std::string secondary_key = entry.key.secondary_key;
+        uint32_t secondary_key_length = secondary_key.size();
+        append_bytes(buffer, reinterpret_cast<const uint8_t*>(&secondary_key_length), sizeof(secondary_key_length));
+        append_bytes(buffer, reinterpret_cast<const uint8_t*>(secondary_key.c_str()), secondary_key_length);
+        
+        // Value
+        uint32_t value_length = entry.data.value.size();
+        append_bytes(buffer, reinterpret_cast<const uint8_t*>(&value_length), sizeof(value_length));
+        append_bytes(buffer, reinterpret_cast<const uint8_t*>(entry.data.value.c_str()), value_length);
+        
+        // Version
+        append_bytes(buffer, reinterpret_cast<const uint8_t*>(&entry.data.version), sizeof(entry.data.version));
+        
+        // Timestamp
+        uint64_t timestamp_ms = entry.data.timestamp.count();
+        append_bytes(buffer, reinterpret_cast<const uint8_t*>(&timestamp_ms), sizeof(timestamp_ms));
+        
+        // Deleted flag
+        uint8_t deleted_flag = entry.data.deleted ? 1 : 0;
+        buffer.push_back(deleted_flag);
+        
+        // Transaction ID
+        append_bytes(buffer, reinterpret_cast<const uint8_t*>(&entry.transaction_id), sizeof(entry.transaction_id));
+        
+        return Result<void>(Status::OK);
+        
+    } catch (const std::exception& e) {
+        return Result<void>(Status::STORAGE_ERROR, "Failed to serialize WAL entry: " + std::string(e.what()));
+    }
+}
+
+Result<void> WAL::deserialize_entry(const std::vector<uint8_t>& buffer, WALEntry& entry) {
+    try {
+        if (buffer.empty()) {
+            return Result<void>(Status::INVALID_ARGUMENT, "Empty buffer for WAL entry deserialization");
+        }
+        
+        size_t offset = 0;
+        
+        // Entry type
+        if (offset >= buffer.size()) {
+            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing type");
+        }
+        entry.type = static_cast<WALEntryType>(buffer[offset++]);
+        
+        // Primary key
+        uint32_t primary_key_length;
+        if (!read_bytes(buffer, offset, reinterpret_cast<uint8_t*>(&primary_key_length), sizeof(primary_key_length))) {
+            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing primary key length");
+        }
+        
+        if (primary_key_length > config::MAX_KEY_SIZE) {
+            return Result<void>(Status::STORAGE_ERROR, "Invalid primary key length in WAL entry");
+        }
+        
+        entry.key.primary_key.resize(primary_key_length);
+        if (!read_bytes(buffer, offset, reinterpret_cast<uint8_t*>(&entry.key.primary_key[0]), primary_key_length)) {
+            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing primary key data");
+        }
+        
+        // Secondary key
+        uint32_t secondary_key_length;
+        if (!read_bytes(buffer, offset, reinterpret_cast<uint8_t*>(&secondary_key_length), sizeof(secondary_key_length))) {
+            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing secondary key length");
+        }
+        
+        if (secondary_key_length > config::MAX_KEY_SIZE) {
+            return Result<void>(Status::STORAGE_ERROR, "Invalid secondary key length in WAL entry");
+        }
+        
+        entry.key.secondary_key.resize(secondary_key_length);
+        if (!read_bytes(buffer, offset, reinterpret_cast<uint8_t*>(&entry.key.secondary_key[0]), secondary_key_length)) {
+            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing secondary key data");
+        }
+        
+        // Value
+        uint32_t value_length;
+        if (!read_bytes(buffer, offset, reinterpret_cast<uint8_t*>(&value_length), sizeof(value_length))) {
+            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing value length");
+        }
+        
+        if (value_length > config::MAX_VALUE_SIZE) {
+            return Result<void>(Status::STORAGE_ERROR, "Invalid value length in WAL entry");
+        }
+        
+        entry.data.value.resize(value_length);
+        if (!read_bytes(buffer, offset, reinterpret_cast<uint8_t*>(&entry.data.value[0]), value_length)) {
+            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing value data");
+        }
+        
+        // Version
+        if (!read_bytes(buffer, offset, reinterpret_cast<uint8_t*>(&entry.data.version), sizeof(entry.data.version))) {
+            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing version");
+        }
+        
+        // Timestamp
+        uint64_t timestamp_ms;
+        if (!read_bytes(buffer, offset, reinterpret_cast<uint8_t*>(&timestamp_ms), sizeof(timestamp_ms))) {
+            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing timestamp");
+        }
+        entry.data.timestamp = Timestamp(timestamp_ms);
+        
+        // Deleted flag
+        if (offset >= buffer.size()) {
+            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing deleted flag");
+        }
+        entry.data.deleted = (buffer[offset++] != 0);
+        
+        // Transaction ID
+        if (!read_bytes(buffer, offset, reinterpret_cast<uint8_t*>(&entry.transaction_id), sizeof(entry.transaction_id))) {
+            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing transaction ID");
         }
         
         return Result<void>(Status::OK);
         
     } catch (const std::exception& e) {
-        return Result<void>(Status::STORAGE_ERROR, "Exception writing WAL entry: " + std::string(e.what()));
+        return Result<void>(Status::STORAGE_ERROR, "Failed to deserialize WAL entry: " + std::string(e.what()));
     }
 }
 
-Result<WALEntry> WAL::read_entry() {
-    try {
-        // Read entry size
-        uint32_t entry_size;
-        file_->read(reinterpret_cast<char*>(&entry_size), sizeof(entry_size));
-        
-        if (file_->gcount() != sizeof(entry_size)) {
-            return Result<WALEntry>(Status::STORAGE_ERROR, "Incomplete WAL entry size");
-        }
-        
-        // Sanity check entry size
-        if (entry_size == 0 || entry_size > 10 * 1024 * 1024) { // Max 10MB per entry
-            return Result<WALEntry>(Status::STORAGE_ERROR, "Invalid WAL entry size");
-        }
-        
-        // Read entry data
-        std::string entry_data(entry_size, '\0');
-        file_->read(&entry_data[0], entry_size);
-        
-        if (file_->gcount() != static_cast<std::streamsize>(entry_size)) {
-            return Result<WALEntry>(Status::STORAGE_ERROR, "Incomplete WAL entry data");
-        }
-        
-        return WALEntry::deserialize(entry_data);
-        
-    } catch (const std::exception& e) {
-        return Result<WALEntry>(Status::STORAGE_ERROR, "Exception reading WAL entry: " + std::string(e.what()));
-    }
+void WAL::append_bytes(std::vector<uint8_t>& buffer, const uint8_t* data, size_t length) {
+    buffer.insert(buffer.end(), data, data + length);
 }
 
-uint32_t WAL::calculate_crc32(const void* data, size_t length) const {
-    const uint8_t* bytes = static_cast<const uint8_t*>(data);
-    uint32_t crc = 0xFFFFFFFF;
-    
-    for (size_t i = 0; i < length; i++) {
-        crc = crc32_table[(crc ^ bytes[i]) & 0xFF] ^ (crc >> 8);
+bool WAL::read_bytes(const std::vector<uint8_t>& buffer, size_t& offset, uint8_t* data, size_t length) {
+    if (offset + length > buffer.size()) {
+        return false;
     }
     
-    return crc ^ 0xFFFFFFFF;
+    std::memcpy(data, buffer.data() + offset, length);
+    offset += length;
+    return true;
 }
 
 } // namespace storage
