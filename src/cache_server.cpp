@@ -1,62 +1,152 @@
 #include "cache/cache_server.h"
-#include "cache/storage/storage_factory.h"
+#include "cache/storage/wal.h"
+#include "cache/storage/memtable.h" 
+#include "cache/storage/sstable.h"
+#include "cache/storage/lsm_tree.h"
 #include "cache/cluster/split_brain_detector.h"
 #include "cache/transaction/transaction_manager.h"
 #include "cache/time/time_sync.h"
 #include "cache/hotspot/hotspot_manager.h"
-#include <thread>
-#include <chrono>
-#include <random>
+#include "cache/monitoring/metrics.h"
+#include "cache/security/auth_manager.h"
+#include <sstream>
+#include <iostream>
+#include <algorithm>
 
 namespace cache {
 
-CacheServer::CacheServer(const CacheServerConfig& config) 
-    : config_(config), is_running_(false) {
-    
-    // 初始化日志系统
-    init_logging();
-    
-    // 创建存储引擎
-    storage_ = storage::StorageFactory::create_storage_engine(
-        config_.storage_config.engine_type, 
-        config_.storage_config.data_directory,
-        config_.storage_config.engine_options
-    );
-    
-    // 创建监控系统
-    monitor_ = std::make_unique<monitoring::DefaultMonitor>();
-    
-    // 创建安全管理器
-    security_ = std::make_unique<security::DefaultSecurityManager>();
-    
-    // 创建网络服务
-    network_ = std::make_unique<network::DefaultNetworkService>();
-    
-    // 创建分片管理器
-    shard_manager_ = std::make_unique<cluster::DefaultShardManager>();
-    
-    // 创建脑裂检测器
-    split_brain_detector_ = std::make_unique<cluster::DefaultSplitBrainDetector>();
-    
-    // 创建事务管理器
-    transaction_manager_ = std::make_unique<transaction::DefaultTransactionManager>();
-    
-    // 创建时间同步服务
-    time_service_ = std::make_unique<time::DefaultTimeService>();
-    
-    // 创建热点管理器
-    hotspot_manager_ = std::make_unique<hotspot::DefaultHotspotManager>();
-    
-    // 初始化性能统计
-    stats_.start_time = std::chrono::steady_clock::now();
-    stats_.total_requests = 0;
-    stats_.successful_requests = 0;
-    stats_.failed_requests = 0;
-    stats_.read_requests = 0;
-    stats_.write_requests = 0;
-    stats_.delete_requests = 0;
-    stats_.cache_hits = 0;
-    stats_.cache_misses = 0;
+// CacheServerEventHandler - 实现所有事件处理器接口
+class CacheServerEventHandler : 
+    public cluster::SplitBrainEventHandler,
+    public transaction::TransactionEventHandler,
+    public time::TimeSyncEventHandler,
+    public hotspot::HotspotEventHandler {
+
+private:
+    std::shared_ptr<monitoring::MetricsCollector> metrics_;
+
+public:
+    CacheServerEventHandler(std::shared_ptr<monitoring::MetricsCollector> metrics) 
+        : metrics_(metrics) {}
+
+    // SplitBrainEventHandler 实现
+    void on_split_brain_detected(const cluster::NetworkPartition& partition) override {
+        LOG_WARN("Split brain detected between partitions");
+        if (metrics_) {
+            metrics_->increment_counter("split_brain_detected");
+        }
+    }
+
+    void on_split_brain_resolved(const cluster::NetworkPartition& partition) override {
+        LOG_INFO("Split brain resolved");
+        if (metrics_) {
+            metrics_->increment_counter("split_brain_resolved");
+        }
+    }
+
+    void on_node_isolated(const cluster::NodeId& node_id, const std::string& reason) override {
+        LOG_WARN("Node isolated: " + node_id + ", reason: " + reason);
+        if (metrics_) {
+            metrics_->increment_counter("node_isolated");
+        }
+    }
+
+    void on_quorum_lost() override {
+        LOG_ERROR("Quorum lost - entering read-only mode");
+        if (metrics_) {
+            metrics_->increment_counter("quorum_lost");
+        }
+    }
+
+    void on_quorum_restored() override {
+        LOG_INFO("Quorum restored - resuming normal operations");
+        if (metrics_) {
+            metrics_->increment_counter("quorum_restored");
+        }
+    }
+
+    // TransactionEventHandler 实现
+    void on_transaction_started(transaction::TransactionId tx_id) override {
+        if (metrics_) {
+            metrics_->increment_counter("transactions_started");
+        }
+    }
+
+    void on_transaction_committed(transaction::TransactionId tx_id) override {
+        if (metrics_) {
+            metrics_->increment_counter("transactions_committed");
+        }
+    }
+
+    void on_transaction_aborted(transaction::TransactionId tx_id, const std::string& reason) override {
+        LOG_WARN("Transaction aborted: " + std::to_string(tx_id) + ", reason: " + reason);
+        if (metrics_) {
+            metrics_->increment_counter("transactions_aborted");
+        }
+    }
+
+    void on_deadlock_detected(const std::vector<transaction::TransactionId>& cycle) override {
+        LOG_WARN("Deadlock detected involving " + std::to_string(cycle.size()) + " transactions");
+        if (metrics_) {
+            metrics_->increment_counter("deadlocks_detected");
+        }
+    }
+
+    // TimeSyncEventHandler 实现
+    void on_time_sync_completed(const cluster::NodeId& node_id, time::ClockOffset offset) override {
+        if (metrics_) {
+            metrics_->set_gauge("time_offset_ms", offset.count());
+        }
+    }
+
+    void on_time_sync_failed(const cluster::NodeId& node_id, const std::string& reason) override {
+        LOG_WARN("Time sync failed with node " + node_id + ": " + reason);
+        if (metrics_) {
+            metrics_->increment_counter("time_sync_failures");
+        }
+    }
+
+    void on_clock_drift_detected(const cluster::NodeId& node_id, time::ClockOffset drift) override {
+        LOG_WARN("Clock drift detected with node " + node_id + ": " + std::to_string(drift.count()) + "ms");
+        if (metrics_) {
+            metrics_->set_gauge("clock_drift_ms", std::abs(drift.count()));
+        }
+    }
+
+    void on_ntp_sync_completed(time::ClockOffset offset) override {
+        if (metrics_) {
+            metrics_->set_gauge("ntp_offset_ms", offset.count());
+        }
+    }
+
+    // HotspotEventHandler 实现
+    void on_hotspot_detected(const MultiLevelKey& key, const hotspot::HotspotInfo& hotspot) override {
+        LOG_INFO("Hotspot detected: " + key.to_string() + ", heat score: " + std::to_string(hotspot.heat_score));
+        if (metrics_) {
+            metrics_->increment_counter("hotspots_detected");
+            metrics_->set_gauge("hotspot_heat_score", hotspot.heat_score);
+        }
+    }
+
+    void on_hotspot_handled(const MultiLevelKey& key, hotspot::HandlingStrategy strategy) override {
+        std::string strategy_str = hotspot::hotspot_utils::handling_strategy_to_string(strategy);
+        LOG_INFO("Hotspot handled: " + key.to_string() + ", strategy: " + strategy_str);
+        if (metrics_) {
+            metrics_->increment_counter("hotspots_handled");
+        }
+    }
+
+    void on_hotspot_cooled_down(const MultiLevelKey& key) override {
+        LOG_INFO("Hotspot cooled down: " + key.to_string());
+        if (metrics_) {
+            metrics_->increment_counter("hotspots_cooled_down");
+        }
+    }
+};
+
+CacheServer::CacheServer() : is_running_(false) {
+    // 初始化事件处理器
+    event_handler_ = std::make_shared<CacheServerEventHandler>(nullptr);
 }
 
 CacheServer::~CacheServer() {
@@ -65,793 +155,546 @@ CacheServer::~CacheServer() {
     }
 }
 
-Result<void> CacheServer::start() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    
+Result<void> CacheServer::start(const CacheConfig& config) {
     if (is_running_) {
-        return Result<void>(Status::OK);
+        return Result<void>(Status::ALREADY_EXISTS, "Server is already running");
+    }
+
+    config_ = config;
+
+    // 1. 初始化指标收集器
+    metrics_collector_ = std::make_shared<monitoring::DefaultMetricsCollector>();
+    auto metrics_result = metrics_collector_->start();
+    if (!metrics_result.is_ok()) {
+        return Result<void>(metrics_result.status, "Failed to start metrics collector: " + metrics_result.error_message);
+    }
+
+    // 更新事件处理器
+    event_handler_ = std::make_shared<CacheServerEventHandler>(metrics_collector_);
+
+    // 2. 初始化安全管理器
+    if (config_.security.enable_authentication) {
+        auth_manager_ = std::make_unique<security::DefaultAuthManager>();
+        auto auth_result = auth_manager_->start(config_.security.auth_config);
+        if (!auth_result.is_ok()) {
+            return Result<void>(auth_result.status, "Failed to start auth manager: " + auth_result.error_message);
+        }
+    }
+
+    // 3. 初始化时间同步服务
+    time_service_ = std::make_unique<time::DefaultTimeService>();
+    time_service_->set_event_handler(event_handler_);
+    auto time_result = time_service_->start(config_.time_sync);
+    if (!time_result.is_ok()) {
+        return Result<void>(time_result.status, "Failed to start time service: " + time_result.error_message);
+    }
+
+    // 4. 初始化存储引擎
+    auto storage_config = config_.storage;
+    lsm_tree_ = std::make_unique<storage::LSMTree>(storage_config);
+    auto storage_result = lsm_tree_->open();
+    if (!storage_result.is_ok()) {
+        return Result<void>(storage_result.status, "Failed to open storage engine: " + storage_result.error_message);
+    }
+
+    // 5. 初始化事务管理器
+    transaction_manager_ = std::make_unique<transaction::DefaultTransactionManager>();
+    transaction_manager_->set_event_handler(event_handler_);
+    auto tx_result = transaction_manager_->start();
+    if (!tx_result.is_ok()) {
+        return Result<void>(tx_result.status, "Failed to start transaction manager: " + tx_result.error_message);
+    }
+
+    // 6. 初始化热点管理器
+    hotspot_manager_ = std::make_unique<hotspot::DefaultHotspotManager>();
+    hotspot_manager_->set_event_handler(event_handler_);
+    auto hotspot_result = hotspot_manager_->start(config_.hotspot);
+    if (!hotspot_result.is_ok()) {
+        return Result<void>(hotspot_result.status, "Failed to start hotspot manager: " + hotspot_result.error_message);
+    }
+
+    // 7. 初始化脑裂检测器
+    split_brain_detector_ = std::make_unique<cluster::DefaultSplitBrainDetector>();
+    split_brain_detector_->set_event_handler(event_handler_);
+    
+    // 添加集群节点
+    for (const auto& node : config_.cluster.nodes) {
+        split_brain_detector_->add_node(node.id);
+        time_service_->add_node(node.id);
     }
     
-    try {
-        log_info("Starting Cache Server...");
-        
-        // 1. 启动存储引擎
-        log_info("Starting storage engine...");
-        auto storage_result = storage_->open();
-        if (!storage_result.is_ok()) {
-            log_error("Failed to start storage engine: " + storage_result.error_message);
-            return storage_result;
-        }
-        
-        // 2. 启动监控系统
-        log_info("Starting monitoring system...");
-        auto monitor_result = monitor_->start();
-        if (!monitor_result.is_ok()) {
-            log_error("Failed to start monitoring: " + monitor_result.error_message);
-            return monitor_result;
-        }
-        
-        // 3. 启动安全管理器
-        log_info("Starting security manager...");
-        auto security_result = security_->start();
-        if (!security_result.is_ok()) {
-            log_error("Failed to start security manager: " + security_result.error_message);
-            return security_result;
-        }
-        
-        // 4. 启动时间同步服务
-        log_info("Starting time synchronization service...");
-        auto time_result = time_service_->start(config_.time_sync_config);
-        if (!time_result.is_ok()) {
-            log_error("Failed to start time sync service: " + time_result.error_message);
-            return time_result;
-        }
-        
-        // 5. 启动事务管理器
-        log_info("Starting transaction manager...");
-        auto tx_result = transaction_manager_->start();
-        if (!tx_result.is_ok()) {
-            log_error("Failed to start transaction manager: " + tx_result.error_message);
-            return tx_result;
-        }
-        
-        // 6. 启动热点管理器
-        log_info("Starting hotspot manager...");
-        auto hotspot_result = hotspot_manager_->start(
-            config_.hotspot_detection_config, 
-            config_.hotspot_handling_config
-        );
-        if (!hotspot_result.is_ok()) {
-            log_error("Failed to start hotspot manager: " + hotspot_result.error_message);
-            return hotspot_result;
-        }
-        
-        // 7. 启动集群组件
-        if (config_.cluster_config.enable_clustering) {
-            log_info("Starting cluster components...");
-            
-            // 启动分片管理器
-            auto shard_result = shard_manager_->start(config_.cluster_config);
-            if (!shard_result.is_ok()) {
-                log_error("Failed to start shard manager: " + shard_result.error_message);
-                return shard_result;
-            }
-            
-            // 启动脑裂检测器
-            cluster::SplitBrainConfig sb_config;
-            auto sb_result = split_brain_detector_->start(sb_config);
-            if (!sb_result.is_ok()) {
-                log_error("Failed to start split brain detector: " + sb_result.error_message);
-                return sb_result;
-            }
-            
-            // 加入集群
-            if (!config_.cluster_config.seed_nodes.empty()) {
-                auto join_result = join_cluster();
-                if (!join_result.is_ok()) {
-                    log_error("Failed to join cluster: " + join_result.error_message);
-                    return join_result;
-                }
-            }
-        }
-        
-        // 8. 启动网络服务（最后启动，这样可以开始接受请求）
-        log_info("Starting network service...");
-        network::NetworkConfig net_config;
-        net_config.listen_address = config_.network_config.listen_address;
-        net_config.listen_port = config_.network_config.listen_port;
-        net_config.max_connections = config_.network_config.max_connections;
-        net_config.enable_ssl = config_.network_config.enable_ssl;
-        
-        auto network_result = network_->start(net_config);
-        if (!network_result.is_ok()) {
-            log_error("Failed to start network service: " + network_result.error_message);
-            return network_result;
-        }
-        
-        // 设置请求处理器
-        network_->set_request_handler(
-            [this](const network::Request& req) -> network::Response {
-                return handle_request(req);
-            }
-        );
-        
-        // 启动后台任务
-        start_background_tasks();
-        
-        is_running_ = true;
-        log_info("Cache Server started successfully on " + 
-                config_.network_config.listen_address + ":" + 
-                std::to_string(config_.network_config.listen_port));
-        
-        return Result<void>(Status::OK);
-        
-    } catch (const std::exception& e) {
-        log_error("Exception during server startup: " + std::string(e.what()));
-        return Result<void>(Status::INTERNAL_ERROR, "Failed to start server: " + std::string(e.what()));
+    auto split_brain_result = split_brain_detector_->start(config_.cluster.split_brain_config);
+    if (!split_brain_result.is_ok()) {
+        return Result<void>(split_brain_result.status, "Failed to start split brain detector: " + split_brain_result.error_message);
     }
+
+    is_running_ = true;
+    LOG_INFO("Cache server started successfully on " + config_.network.host + ":" + std::to_string(config_.network.port));
+
+    return Result<void>(Status::OK);
 }
 
 Result<void> CacheServer::stop() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    
     if (!is_running_) {
         return Result<void>(Status::OK);
     }
-    
-    log_info("Stopping Cache Server...");
-    
-    try {
-        // 停止后台任务
-        stop_background_tasks();
-        
-        // 停止网络服务
-        if (network_) {
-            network_->stop();
-        }
-        
-        // 停止集群组件
-        if (split_brain_detector_) {
-            split_brain_detector_->stop();
-        }
-        
-        if (shard_manager_) {
-            shard_manager_->stop();
-        }
-        
-        // 停止应用层组件
-        if (hotspot_manager_) {
-            hotspot_manager_->stop();
-        }
-        
-        if (transaction_manager_) {
-            transaction_manager_->stop();
-        }
-        
-        if (time_service_) {
-            time_service_->stop();
-        }
-        
-        if (security_) {
-            security_->stop();
-        }
-        
-        if (monitor_) {
-            monitor_->stop();
-        }
-        
-        // 最后停止存储引擎
-        if (storage_) {
-            storage_->close();
-        }
-        
-        is_running_ = false;
-        log_info("Cache Server stopped successfully");
-        
-        return Result<void>(Status::OK);
-        
-    } catch (const std::exception& e) {
-        log_error("Exception during server shutdown: " + std::string(e.what()));
-        return Result<void>(Status::INTERNAL_ERROR, "Failed to stop server gracefully");
+
+    LOG_INFO("Stopping cache server...");
+
+    // 按相反顺序停止组件
+    if (split_brain_detector_) {
+        split_brain_detector_->stop();
     }
+
+    if (hotspot_manager_) {
+        hotspot_manager_->stop();
+    }
+
+    if (transaction_manager_) {
+        transaction_manager_->stop();
+    }
+
+    if (lsm_tree_) {
+        lsm_tree_->close();
+    }
+
+    if (time_service_) {
+        time_service_->stop();
+    }
+
+    if (auth_manager_) {
+        auth_manager_->stop();
+    }
+
+    if (metrics_collector_) {
+        metrics_collector_->stop();
+    }
+
+    is_running_ = false;
+    LOG_INFO("Cache server stopped");
+
+    return Result<void>(Status::OK);
 }
 
 bool CacheServer::is_running() const {
     return is_running_;
 }
 
-Result<DataEntry> CacheServer::get(const MultiLevelKey& key, const std::string& client_id) {
+Result<DataEntry> CacheServer::get(const MultiLevelKey& key, const RequestContext& context) {
     if (!is_running_) {
         return Result<DataEntry>(Status::SERVICE_UNAVAILABLE, "Server is not running");
     }
+
+    // 记录访问信息用于热点检测
+    hotspot::AccessInfo access_info;
+    access_info.timestamp = time_service_->now();
+    access_info.operation = OperationType::read;
+    access_info.size = 0; // 读操作大小为0
+    access_info.location = context.client_location;
     
-    auto start_time = std::chrono::steady_clock::now();
-    
-    // 记录访问用于热点检测
-    hotspot_manager_->record_access(key, OperationType::GET, get_node_id());
-    
-    // 更新统计
-    stats_.total_requests++;
-    stats_.read_requests++;
-    
-    try {
-        // 检查权限
-        auto auth_result = check_permission(client_id, key, "read");
+    hotspot_manager_->record_access(key, access_info);
+
+    // 安全验证
+    if (auth_manager_) {
+        auto auth_result = auth_manager_->authenticate(context.auth_token);
         if (!auth_result.is_ok()) {
-            stats_.failed_requests++;
-            return Result<DataEntry>(auth_result.status, auth_result.error_message);
+            metrics_collector_->increment_counter("auth_failures");
+            return Result<DataEntry>(Status::UNAUTHORIZED, "Authentication failed");
         }
-        
-        // 如果启用了集群，检查分片
-        if (config_.cluster_config.enable_clustering) {
-            auto shard_result = get_key_shard(key);
-            if (!shard_result.is_ok()) {
-                stats_.failed_requests++;
-                return Result<DataEntry>(shard_result.status, shard_result.error_message);
-            }
-            
-            // 如果key不在本节点，转发请求
-            if (shard_result.data != get_node_id()) {
-                auto forward_result = forward_get_request(key, shard_result.data);
-                if (forward_result.is_ok()) {
-                    stats_.successful_requests++;
-                } else {
-                    stats_.failed_requests++;
-                }
-                return forward_result;
-            }
+
+        auto authz_result = auth_manager_->authorize(auth_result.data, key, security::Permission::READ);
+        if (!authz_result.is_ok()) {
+            metrics_collector_->increment_counter("authz_failures");
+            return Result<DataEntry>(Status::FORBIDDEN, "Authorization failed");
         }
-        
-        // 从存储引擎读取
-        auto result = storage_->get(key);
-        
-        if (result.is_ok()) {
-            stats_.successful_requests++;
-            stats_.cache_hits++;
-        } else {
-            if (result.status == Status::NOT_FOUND) {
-                stats_.cache_misses++;
-            } else {
-                stats_.failed_requests++;
-            }
-        }
-        
-        // 记录延迟
-        auto end_time = std::chrono::steady_clock::now();
-        auto latency = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        monitor_->record_latency("get", latency);
-        
-        return result;
-        
-    } catch (const std::exception& e) {
-        stats_.failed_requests++;
-        log_error("Exception in get operation: " + std::string(e.what()));
-        return Result<DataEntry>(Status::INTERNAL_ERROR, "Internal server error");
     }
+
+    // 检查是否需要事务
+    if (context.transaction_id.has_value()) {
+        auto tx_result = transaction_manager_->read(context.transaction_id.value(), key);
+        if (tx_result.is_ok()) {
+            metrics_collector_->increment_counter("reads_tx_success");
+            access_info.size = tx_result.data.value.size();
+            hotspot_manager_->record_access(key, access_info);
+        } else {
+            metrics_collector_->increment_counter("reads_tx_failed");
+        }
+        return tx_result;
+    }
+
+    // 普通读取
+    auto result = lsm_tree_->get(key);
+    if (result.is_ok()) {
+        metrics_collector_->increment_counter("reads_success");
+        access_info.size = result.data.value.size();
+        hotspot_manager_->record_access(key, access_info);
+    } else {
+        metrics_collector_->increment_counter("reads_failed");
+    }
+
+    return result;
 }
 
-Result<void> CacheServer::put(const MultiLevelKey& key, const DataEntry& entry, const std::string& client_id) {
+Result<void> CacheServer::put(const MultiLevelKey& key, const DataEntry& value, const RequestContext& context) {
     if (!is_running_) {
         return Result<void>(Status::SERVICE_UNAVAILABLE, "Server is not running");
     }
+
+    // 记录访问信息用于热点检测
+    hotspot::AccessInfo access_info;
+    access_info.timestamp = time_service_->now();
+    access_info.operation = OperationType::WRITE;
+    access_info.size = value.value.size();
+    access_info.location = context.client_location;
     
-    auto start_time = std::chrono::steady_clock::now();
-    
-    // 记录访问用于热点检测
-    hotspot_manager_->record_access(key, OperationType::PUT, get_node_id());
-    
-    // 更新统计
-    stats_.total_requests++;
-    stats_.write_requests++;
-    
-    try {
-        // 检查权限
-        auto auth_result = check_permission(client_id, key, "write");
+    hotspot_manager_->record_access(key, access_info);
+
+    // 安全验证
+    if (auth_manager_) {
+        auto auth_result = auth_manager_->authenticate(context.auth_token);
         if (!auth_result.is_ok()) {
-            stats_.failed_requests++;
-            return Result<void>(auth_result.status, auth_result.error_message);
+            metrics_collector_->increment_counter("auth_failures");
+            return Result<void>(Status::UNAUTHORIZED, "Authentication failed");
         }
-        
-        // 验证数据大小
-        if (key.to_string().size() > config::MAX_KEY_SIZE) {
-            stats_.failed_requests++;
-            return Result<void>(Status::INVALID_ARGUMENT, "Key size exceeds limit");
+
+        auto authz_result = auth_manager_->authorize(auth_result.data, key, security::Permission::write);
+        if (!authz_result.is_ok()) {
+            metrics_collector_->increment_counter("authz_failures");
+            return Result<void>(Status::FORBIDDEN, "Authorization failed");
         }
-        
-        if (entry.value.size() > config::MAX_VALUE_SIZE) {
-            stats_.failed_requests++;
-            return Result<void>(Status::INVALID_ARGUMENT, "Value size exceeds limit");
-        }
-        
-        // 如果启用了集群，检查分片
-        if (config_.cluster_config.enable_clustering) {
-            auto shard_result = get_key_shard(key);
-            if (!shard_result.is_ok()) {
-                stats_.failed_requests++;
-                return Result<void>(shard_result.status, shard_result.error_message);
-            }
-            
-            // 如果key不在本节点，转发请求
-            if (shard_result.data != get_node_id()) {
-                auto forward_result = forward_put_request(key, entry, shard_result.data);
-                if (forward_result.is_ok()) {
-                    stats_.successful_requests++;
-                } else {
-                    stats_.failed_requests++;
-                }
-                return forward_result;
-            }
-        }
-        
-        // 写入存储引擎
-        auto result = storage_->put(key, entry);
-        
-        if (result.is_ok()) {
-            stats_.successful_requests++;
-            
-            // 如果启用了集群，同步到副本
-            if (config_.cluster_config.enable_clustering && config_.cluster_config.replication_factor > 1) {
-                replicate_write(key, entry);
-            }
-        } else {
-            stats_.failed_requests++;
-        }
-        
-        // 记录延迟
-        auto end_time = std::chrono::steady_clock::now();
-        auto latency = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        monitor_->record_latency("put", latency);
-        
-        return result;
-        
-    } catch (const std::exception& e) {
-        stats_.failed_requests++;
-        log_error("Exception in put operation: " + std::string(e.what()));
-        return Result<void>(Status::INTERNAL_ERROR, "Internal server error");
     }
+
+    // 检查集群状态
+    if (!split_brain_detector_->has_quorum()) {
+        metrics_collector_->increment_counter("writes_rejected_no_quorum");
+        return Result<void>(Status::SERVICE_UNAVAILABLE, "No quorum available");
+    }
+
+    // 检查是否需要事务
+    if (context.transaction_id.has_value()) {
+        auto tx_result = transaction_manager_->write(context.transaction_id.value(), key, value);
+        if (tx_result.is_ok()) {
+            metrics_collector_->increment_counter("writes_tx_success");
+        } else {
+            metrics_collector_->increment_counter("writes_tx_failed");
+        }
+        return tx_result;
+    }
+
+    // 普通写入
+    auto result = lsm_tree_->put(key, value);
+    if (result.is_ok()) {
+        metrics_collector_->increment_counter("writes_success");
+    } else {
+        metrics_collector_->increment_counter("writes_failed");
+    }
+
+    return result;
 }
 
-Result<void> CacheServer::remove(const MultiLevelKey& key, const std::string& client_id) {
+Result<void> CacheServer::remove(const MultiLevelKey& key, const RequestContext& context) {
     if (!is_running_) {
         return Result<void>(Status::SERVICE_UNAVAILABLE, "Server is not running");
     }
+
+    // 记录访问信息用于热点检测
+    hotspot::AccessInfo access_info;
+    access_info.timestamp = time_service_->now();
+    access_info.operation = OperationType::DELETE;
+    access_info.size = 0;
+    access_info.location = context.client_location;
     
-    auto start_time = std::chrono::steady_clock::now();
-    
-    // 记录访问用于热点检测
-    hotspot_manager_->record_access(key, OperationType::DELETE, get_node_id());
-    
-    // 更新统计
-    stats_.total_requests++;
-    stats_.delete_requests++;
-    
-    try {
-        // 检查权限
-        auto auth_result = check_permission(client_id, key, "delete");
+    hotspot_manager_->record_access(key, access_info);
+
+    // 安全验证
+    if (auth_manager_) {
+        auto auth_result = auth_manager_->authenticate(context.auth_token);
         if (!auth_result.is_ok()) {
-            stats_.failed_requests++;
-            return Result<void>(auth_result.status, auth_result.error_message);
+            metrics_collector_->increment_counter("auth_failures");
+            return Result<void>(Status::UNAUTHORIZED, "Authentication failed");
         }
-        
-        // 如果启用了集群，检查分片
-        if (config_.cluster_config.enable_clustering) {
-            auto shard_result = get_key_shard(key);
-            if (!shard_result.is_ok()) {
-                stats_.failed_requests++;
-                return Result<void>(shard_result.status, shard_result.error_message);
-            }
-            
-            // 如果key不在本节点，转发请求
-            if (shard_result.data != get_node_id()) {
-                auto forward_result = forward_delete_request(key, shard_result.data);
-                if (forward_result.is_ok()) {
-                    stats_.successful_requests++;
-                } else {
-                    stats_.failed_requests++;
-                }
-                return forward_result;
-            }
+
+        auto authz_result = auth_manager_->authorize(auth_result.data, key, security::Permission::write);
+        if (!authz_result.is_ok()) {
+            metrics_collector_->increment_counter("authz_failures");
+            return Result<void>(Status::FORBIDDEN, "Authorization failed");
         }
-        
-        // 从存储引擎删除
-        auto result = storage_->remove(key);
-        
-        if (result.is_ok()) {
-            stats_.successful_requests++;
-            
-            // 如果启用了集群，同步到副本
-            if (config_.cluster_config.enable_clustering && config_.cluster_config.replication_factor > 1) {
-                replicate_delete(key);
-            }
-        } else {
-            stats_.failed_requests++;
-        }
-        
-        // 记录延迟
-        auto end_time = std::chrono::steady_clock::now();
-        auto latency = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        monitor_->record_latency("remove", latency);
-        
-        return result;
-        
-    } catch (const std::exception& e) {
-        stats_.failed_requests++;
-        log_error("Exception in remove operation: " + std::string(e.what()));
-        return Result<void>(Status::INTERNAL_ERROR, "Internal server error");
     }
+
+    // 检查集群状态
+    if (!split_brain_detector_->has_quorum()) {
+        metrics_collector_->increment_counter("deletes_rejected_no_quorum");
+        return Result<void>(Status::SERVICE_UNAVAILABLE, "No quorum available");
+    }
+
+    // 检查是否需要事务
+    if (context.transaction_id.has_value()) {
+        auto tx_result = transaction_manager_->remove(context.transaction_id.value(), key);
+        if (tx_result.is_ok()) {
+            metrics_collector_->increment_counter("deletes_tx_success");
+        } else {
+            metrics_collector_->increment_counter("deletes_tx_failed");
+        }
+        return tx_result;
+    }
+
+    // 普通删除
+    auto result = lsm_tree_->remove(key);
+    if (result.is_ok()) {
+        metrics_collector_->increment_counter("deletes_success");
+    } else {
+        metrics_collector_->increment_counter("deletes_failed");
+    }
+
+    return result;
 }
 
-Result<std::vector<std::pair<MultiLevelKey, DataEntry>>> 
-CacheServer::range_scan(const RangeQuery& query, const std::string& client_id) {
+Result<std::vector<DataEntry>> CacheServer::range_query(const MultiLevelKey& start_key, 
+                                                       const MultiLevelKey& end_key,
+                                                       const RequestContext& context) {
     if (!is_running_) {
-        return Result<std::vector<std::pair<MultiLevelKey, DataEntry>>>(
-            Status::SERVICE_UNAVAILABLE, "Server is not running");
+        return Result<std::vector<DataEntry>>(Status::SERVICE_UNAVAILABLE, "Server is not running");
     }
-    
-    auto start_time = std::chrono::steady_clock::now();
-    
-    // 更新统计
-    stats_.total_requests++;
-    stats_.read_requests++;
-    
-    try {
-        // 检查权限
-        auto auth_result = check_permission(client_id, query.start_key, "read");
+
+    // 安全验证
+    if (auth_manager_) {
+        auto auth_result = auth_manager_->authenticate(context.auth_token);
         if (!auth_result.is_ok()) {
-            stats_.failed_requests++;
-            return Result<std::vector<std::pair<MultiLevelKey, DataEntry>>>(
-                auth_result.status, auth_result.error_message);
+            metrics_collector_->increment_counter("auth_failures");
+            return Result<std::vector<DataEntry>>(Status::UNAUTHORIZED, "Authentication failed");
         }
-        
-        // 限制范围查询的结果数量
-        RangeQuery limited_query = query;
-        if (limited_query.limit > config_.performance_config.max_range_scan_limit) {
-            limited_query.limit = config_.performance_config.max_range_scan_limit;
-        }
-        
-        // 从存储引擎扫描
-        auto result = storage_->range_scan(limited_query);
-        
-        if (result.is_ok()) {
-            stats_.successful_requests++;
-        } else {
-            stats_.failed_requests++;
-        }
-        
-        // 记录延迟
-        auto end_time = std::chrono::steady_clock::now();
-        auto latency = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        monitor_->record_latency("range_scan", latency);
-        
-        return result;
-        
-    } catch (const std::exception& e) {
-        stats_.failed_requests++;
-        log_error("Exception in range_scan operation: " + std::string(e.what()));
-        return Result<std::vector<std::pair<MultiLevelKey, DataEntry>>>(
-            Status::INTERNAL_ERROR, "Internal server error");
-    }
-}
 
-CacheServerStats CacheServer::get_stats() const {
-    CacheServerStats current_stats = stats_;
-    
-    // 计算运行时间
-    auto now = std::chrono::steady_clock::now();
-    current_stats.uptime = std::chrono::duration_cast<std::chrono::seconds>(
-        now - current_stats.start_time);
-    
-    // 获取存储统计
-    if (storage_) {
-        current_stats.storage_size = storage_->size();
-        current_stats.memory_usage = storage_->memory_usage();
-        current_stats.cache_hit_ratio = storage_->cache_hit_ratio();
-    }
-    
-    // 获取热点统计
-    if (hotspot_manager_) {
-        current_stats.hotspot_keys = hotspot_manager_->get_current_hotspots().size();
-    }
-    
-    return current_stats;
-}
-
-std::string CacheServer::get_node_id() const {
-    return config_.node_config.node_id;
-}
-
-// 私有方法实现
-
-void CacheServer::init_logging() {
-    // 初始化日志系统
-    // 这里可以配置日志级别、输出目标等
-}
-
-void CacheServer::log_info(const std::string& message) {
-    // 记录信息日志
-    std::cout << "[INFO] " << message << std::endl;
-}
-
-void CacheServer::log_error(const std::string& message) {
-    // 记录错误日志
-    std::cerr << "[ERROR] " << message << std::endl;
-}
-
-void CacheServer::log_debug(const std::string& message) {
-    // 记录调试日志
-    if (config_.debug_config.enable_debug_logging) {
-        std::cout << "[DEBUG] " << message << std::endl;
-    }
-}
-
-network::Response CacheServer::handle_request(const network::Request& request) {
-    network::Response response;
-    response.request_id = request.request_id;
-    
-    try {
-        // 解析请求类型
-        switch (request.type) {
-            case network::RequestType::GET: {
-                auto result = get(request.key, request.client_id);
-                if (result.is_ok()) {
-                    response.status = network::ResponseStatus::SUCCESS;
-                    response.data = result.data;
-                } else {
-                    response.status = network::ResponseStatus::ERROR;
-                    response.error_message = result.error_message;
-                }
-                break;
-            }
-            
-            case network::RequestType::PUT: {
-                auto result = put(request.key, request.entry, request.client_id);
-                if (result.is_ok()) {
-                    response.status = network::ResponseStatus::SUCCESS;
-                } else {
-                    response.status = network::ResponseStatus::ERROR;
-                    response.error_message = result.error_message;
-                }
-                break;
-            }
-            
-            case network::RequestType::DELETE: {
-                auto result = remove(request.key, request.client_id);
-                if (result.is_ok()) {
-                    response.status = network::ResponseStatus::SUCCESS;
-                } else {
-                    response.status = network::ResponseStatus::ERROR;
-                    response.error_message = result.error_message;
-                }
-                break;
-            }
-            
-            case network::RequestType::RANGE_SCAN: {
-                auto result = range_scan(request.range_query, request.client_id);
-                if (result.is_ok()) {
-                    response.status = network::ResponseStatus::SUCCESS;
-                    response.scan_results = result.data;
-                } else {
-                    response.status = network::ResponseStatus::ERROR;
-                    response.error_message = result.error_message;
-                }
-                break;
-            }
-            
-            case network::RequestType::STATS: {
-                response.status = network::ResponseStatus::SUCCESS;
-                response.stats = get_stats();
-                break;
-            }
-            
-            default:
-                response.status = network::ResponseStatus::ERROR;
-                response.error_message = "Unsupported request type";
-                break;
-        }
-        
-    } catch (const std::exception& e) {
-        response.status = network::ResponseStatus::ERROR;
-        response.error_message = "Internal server error: " + std::string(e.what());
-    }
-    
-    return response;
-}
-
-Result<void> CacheServer::check_permission(const std::string& client_id, 
-                                          const MultiLevelKey& key, 
-                                          const std::string& operation) {
-    if (!config_.security_config.enable_authentication) {
-        return Result<void>(Status::OK);
-    }
-    
-    return security_->check_permission(client_id, key.to_string(), operation);
-}
-
-Result<NodeId> CacheServer::get_key_shard(const MultiLevelKey& key) {
-    return shard_manager_->get_shard_for_key(key);
-}
-
-Result<void> CacheServer::join_cluster() {
-    // 实现集群加入逻辑
-    for (const auto& seed_node : config_.cluster_config.seed_nodes) {
-        auto result = shard_manager_->join_cluster(seed_node);
-        if (result.is_ok()) {
-            log_info("Successfully joined cluster via seed node: " + seed_node);
-            return result;
+        auto authz_result = auth_manager_->authorize(auth_result.data, start_key, security::Permission::read);
+        if (!authz_result.is_ok()) {
+            metrics_collector_->increment_counter("authz_failures");
+            return Result<std::vector<DataEntry>>(Status::FORBIDDEN, "Authorization failed");
         }
     }
-    
-    return Result<void>(Status::NETWORK_ERROR, "Failed to join cluster via any seed node");
-}
 
-void CacheServer::start_background_tasks() {
-    stop_background_ = false;
-    
-    // 启动健康检查任务
-    health_check_thread_ = std::thread(&CacheServer::health_check_loop, this);
-    
-    // 启动统计报告任务
-    stats_report_thread_ = std::thread(&CacheServer::stats_report_loop, this);
-    
-    // 启动垃圾回收任务
-    gc_thread_ = std::thread(&CacheServer::garbage_collection_loop, this);
-}
-
-void CacheServer::stop_background_tasks() {
-    stop_background_ = true;
-    
-    if (health_check_thread_.joinable()) {
-        health_check_thread_.join();
+    auto result = lsm_tree_->range_query(start_key, end_key);
+    if (result.is_ok()) {
+        metrics_collector_->increment_counter("range_queries_success");
+        metrics_collector_->set_gauge("last_range_query_size", result.data.size());
+    } else {
+        metrics_collector_->increment_counter("range_queries_failed");
     }
-    
-    if (stats_report_thread_.joinable()) {
-        stats_report_thread_.join();
+
+    return result;
+}
+
+Result<transaction::TransactionId> CacheServer::begin_transaction(const RequestContext& context,
+                                                                 transaction::IsolationLevel isolation) {
+    if (!is_running_) {
+        return Result<transaction::TransactionId>(Status::SERVICE_UNAVAILABLE, "Server is not running");
     }
-    
-    if (gc_thread_.joinable()) {
-        gc_thread_.join();
-    }
-}
 
-void CacheServer::health_check_loop() {
-    while (!stop_background_) {
-        try {
-            // 检查各组件健康状态
-            bool storage_healthy = storage_ && storage_->is_open();
-            bool network_healthy = network_ && network_->is_running();
-            bool cluster_healthy = !config_.cluster_config.enable_clustering || 
-                                  (shard_manager_ && shard_manager_->is_running());
-            
-            if (!storage_healthy) {
-                log_error("Storage engine is not healthy");
-            }
-            
-            if (!network_healthy) {
-                log_error("Network service is not healthy");
-            }
-            
-            if (!cluster_healthy) {
-                log_error("Cluster components are not healthy");
-            }
-            
-            // 检查资源使用情况
-            auto stats = get_stats();
-            if (stats.memory_usage > config_.performance_config.max_memory_usage) {
-                log_error("Memory usage exceeded limit: " + std::to_string(stats.memory_usage));
-            }
-            
-        } catch (const std::exception& e) {
-            log_error("Exception in health check: " + std::string(e.what()));
-        }
-        
-        std::this_thread::sleep_for(std::chrono::seconds(30));
-    }
-}
-
-void CacheServer::stats_report_loop() {
-    while (!stop_background_) {
-        try {
-            auto stats = get_stats();
-            
-            // 记录关键指标到监控系统
-            if (monitor_) {
-                monitor_->record_counter("total_requests", stats.total_requests);
-                monitor_->record_counter("successful_requests", stats.successful_requests);
-                monitor_->record_counter("failed_requests", stats.failed_requests);
-                monitor_->record_gauge("cache_hit_ratio", stats.cache_hit_ratio);
-                monitor_->record_gauge("memory_usage", stats.memory_usage);
-                monitor_->record_gauge("storage_size", stats.storage_size);
-            }
-            
-        } catch (const std::exception& e) {
-            log_error("Exception in stats reporting: " + std::string(e.what()));
-        }
-        
-        std::this_thread::sleep_for(std::chrono::seconds(60));
-    }
-}
-
-void CacheServer::garbage_collection_loop() {
-    while (!stop_background_) {
-        try {
-            // 触发存储引擎的压缩
-            if (storage_) {
-                storage_->compact();
-            }
-            
-            // 清理过期的事务
-            if (transaction_manager_) {
-                transaction_manager_->cleanup_expired_transactions();
-            }
-            
-            // 清理过期的热点记录
-            if (hotspot_manager_) {
-                // hotspot_manager_->cleanup_expired_records();
-            }
-            
-        } catch (const std::exception& e) {
-            log_error("Exception in garbage collection: " + std::string(e.what()));
-        }
-        
-        std::this_thread::sleep_for(std::chrono::minutes(10));
-    }
-}
-
-Result<DataEntry> CacheServer::forward_get_request(const MultiLevelKey& key, const NodeId& target_node) {
-    // 实现请求转发逻辑
-    return network_->forward_get_request(key, target_node);
-}
-
-Result<void> CacheServer::forward_put_request(const MultiLevelKey& key, 
-                                             const DataEntry& entry, 
-                                             const NodeId& target_node) {
-    return network_->forward_put_request(key, entry, target_node);
-}
-
-Result<void> CacheServer::forward_delete_request(const MultiLevelKey& key, const NodeId& target_node) {
-    return network_->forward_delete_request(key, target_node);
-}
-
-void CacheServer::replicate_write(const MultiLevelKey& key, const DataEntry& entry) {
-    // 获取副本节点列表
-    auto replica_nodes = shard_manager_->get_replica_nodes(key);
-    
-    // 异步复制到副本节点
-    for (const auto& node : replica_nodes) {
-        if (node != get_node_id()) {
-            std::thread([this, key, entry, node]() {
-                try {
-                    auto result = network_->replicate_write(key, entry, node);
-                    if (!result.is_ok()) {
-                        log_error("Failed to replicate write to node " + node + ": " + result.error_message);
-                    }
-                } catch (const std::exception& e) {
-                    log_error("Exception during write replication: " + std::string(e.what()));
-                }
-            }).detach();
+    // 安全验证
+    if (auth_manager_) {
+        auto auth_result = auth_manager_->authenticate(context.auth_token);
+        if (!auth_result.is_ok()) {
+            metrics_collector_->increment_counter("auth_failures");
+            return Result<transaction::TransactionId>(Status::UNAUTHORIZED, "Authentication failed");
         }
     }
+
+    // 检查集群状态
+    if (!split_brain_detector_->has_quorum()) {
+        metrics_collector_->increment_counter("tx_begin_rejected_no_quorum");
+        return Result<transaction::TransactionId>(Status::SERVICE_UNAVAILABLE, "No quorum available");
+    }
+
+    return transaction_manager_->begin_transaction(isolation);
 }
 
-void CacheServer::replicate_delete(const MultiLevelKey& key) {
-    // 获取副本节点列表
-    auto replica_nodes = shard_manager_->get_replica_nodes(key);
-    
-    // 异步复制删除到副本节点
-    for (const auto& node : replica_nodes) {
-        if (node != get_node_id()) {
-            std::thread([this, key, node]() {
-                try {
-                    auto result = network_->replicate_delete(key, node);
-                    if (!result.is_ok()) {
-                        log_error("Failed to replicate delete to node " + node + ": " + result.error_message);
-                    }
-                } catch (const std::exception& e) {
-                    log_error("Exception during delete replication: " + std::string(e.what()));
-                }
-            }).detach();
+Result<void> CacheServer::commit_transaction(transaction::TransactionId tx_id, const RequestContext& context) {
+    if (!is_running_) {
+        return Result<void>(Status::SERVICE_UNAVAILABLE, "Server is not running");
+    }
+
+    // 安全验证
+    if (auth_manager_) {
+        auto auth_result = auth_manager_->authenticate(context.auth_token);
+        if (!auth_result.is_ok()) {
+            metrics_collector_->increment_counter("auth_failures");
+            return Result<void>(Status::UNAUTHORIZED, "Authentication failed");
         }
     }
+
+    return transaction_manager_->commit_transaction(tx_id);
+}
+
+Result<void> CacheServer::abort_transaction(transaction::TransactionId tx_id, const RequestContext& context) {
+    if (!is_running_) {
+        return Result<void>(Status::SERVICE_UNAVAILABLE, "Server is not running");
+    }
+
+    // 安全验证
+    if (auth_manager_) {
+        auto auth_result = auth_manager_->authenticate(context.auth_token);
+        if (!auth_result.is_ok()) {
+            metrics_collector_->increment_counter("auth_failures");
+            return Result<void>(Status::UNAUTHORIZED, "Authentication failed");
+        }
+    }
+
+    return transaction_manager_->abort_transaction(tx_id);
+}
+
+monitoring::SystemMetrics CacheServer::get_metrics() const {
+    if (!metrics_collector_) {
+        return monitoring::SystemMetrics{};
+    }
+
+    return metrics_collector_->get_system_metrics();
+}
+
+cluster::ClusterStatus CacheServer::get_cluster_status() const {
+    cluster::ClusterStatus status;
+    
+    if (split_brain_detector_) {
+        status.has_quorum = split_brain_detector_->has_quorum();
+        status.split_brain_status = split_brain_detector_->get_status();
+        status.detected_partitions = split_brain_detector_->get_detected_partitions();
+    }
+
+    if (time_service_) {
+        status.time_sync_quality = time_service_->get_sync_quality();
+        status.estimated_uncertainty = time_service_->get_estimated_uncertainty();
+    }
+
+    return status;
+}
+
+std::vector<hotspot::HotspotInfo> CacheServer::get_hotspots() const {
+    if (!hotspot_manager_) {
+        return {};
+    }
+
+    return hotspot_manager_->get_hotspots();
+}
+
+hotspot::HotspotSummary CacheServer::get_hotspot_summary() const {
+    if (!hotspot_manager_) {
+        return hotspot::HotspotSummary{};
+    }
+
+    return hotspot_manager_->get_summary();
+}
+
+Result<void> CacheServer::handle_hotspot(const MultiLevelKey& key, hotspot::HandlingStrategy strategy,
+                                        const RequestContext& context) {
+    if (!is_running_) {
+        return Result<void>(Status::SERVICE_UNAVAILABLE, "Server is not running");
+    }
+
+    // 安全验证 - 需要管理员权限
+    if (auth_manager_) {
+        auto auth_result = auth_manager_->authenticate(context.auth_token);
+        if (!auth_result.is_ok()) {
+            return Result<void>(Status::UNAUTHORIZED, "Authentication failed");
+        }
+
+        auto authz_result = auth_manager_->authorize(auth_result.data, key, security::Permission::admin);
+        if (!authz_result.is_ok()) {
+            return Result<void>(Status::FORBIDDEN, "Admin permission required");
+        }
+    }
+
+    return hotspot_manager_->handle_hotspot(key, strategy);
+}
+
+time::HybridLogicalClock CacheServer::get_current_time() const {
+    if (!time_service_) {
+        time::HybridLogicalClock hlc;
+        hlc.physical_time = std::chrono::system_clock::now();
+        hlc.logical_time = 0;
+        return hlc;
+    }
+
+    return time_service_->now_logical();
+}
+
+Result<void> CacheServer::sync_time_with_node(const cluster::NodeId& node_id) {
+    if (!time_service_) {
+        return Result<void>(Status::SERVICE_UNAVAILABLE, "Time service not available");
+    }
+
+    return time_service_->sync_with_node(node_id);
+}
+
+std::vector<transaction::TransactionId> CacheServer::get_active_transactions() const {
+    if (!transaction_manager_) {
+        return {};
+    }
+
+    return transaction_manager_->get_active_transactions();
+}
+
+transaction::TransactionState CacheServer::get_transaction_state(transaction::TransactionId tx_id) const {
+    if (!transaction_manager_) {
+        return transaction::TransactionState::ABORTED;
+    }
+
+    return transaction_manager_->get_transaction_state(tx_id);
+}
+
+std::string CacheServer::get_status_summary() const {
+    std::ostringstream oss;
+    
+    oss << "=== Cache Server Status ===\n";
+    oss << "Running: " << (is_running_ ? "Yes" : "No") << "\n";
+
+    if (is_running_) {
+        // 基础状态
+        auto metrics = get_metrics();
+        oss << "Memory Usage: " << metrics.memory_usage_mb << " MB\n";
+        oss << "CPU Usage: " << std::fixed << std::setprecision(1) << metrics.cpu_usage_percent << "%\n";
+
+        // 集群状态
+        auto cluster_status = get_cluster_status();
+        oss << "Has Quorum: " << (cluster_status.has_quorum ? "Yes" : "No") << "\n";
+        oss << "Split Brain Status: " << static_cast<int>(cluster_status.split_brain_status) << "\n";
+        oss << "Time Sync Quality: " << std::fixed << std::setprecision(2) << cluster_status.time_sync_quality << "\n";
+
+        // 热点状态
+        auto hotspot_summary = get_hotspot_summary();
+        oss << "Active Hotspots: " << hotspot_summary.active_hotspots << "\n";
+        oss << "Total Keys: " << hotspot_summary.total_keys << "\n";
+        oss << "Total Requests: " << hotspot_summary.total_requests << "\n";
+
+        // 事务状态
+        auto active_txs = get_active_transactions();
+        oss << "Active Transactions: " << active_txs.size() << "\n";
+    }
+
+    return oss.str();
+}
+
+Result<void> CacheServer::force_compaction() {
+    if (!lsm_tree_) {
+        return Result<void>(Status::SERVICE_UNAVAILABLE, "Storage engine not available");
+    }
+
+    return lsm_tree_->force_compaction();
+}
+
+Result<void> CacheServer::backup_data(const std::string& backup_path) {
+    if (!lsm_tree_) {
+        return Result<void>(Status::SERVICE_UNAVAILABLE, "Storage engine not available");
+    }
+
+    // 简化的备份实现
+    // 实际实现需要完整的备份和恢复机制
+    return Result<void>(Status::NOT_IMPLEMENTED, "Backup feature not implemented");
+}
+
+Result<void> CacheServer::restore_data(const std::string& backup_path) {
+    if (!lsm_tree_) {
+        return Result<void>(Status::SERVICE_UNAVAILABLE, "Storage engine not available");
+    }
+
+    // 简化的恢复实现
+    return Result<void>(Status::NOT_IMPLEMENTED, "Restore feature not implemented");
 }
 
 } // namespace cache
