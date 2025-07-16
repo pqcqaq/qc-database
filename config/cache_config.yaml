@@ -1,0 +1,130 @@
+# Distributed Cache Server Configuration
+# This is a comprehensive configuration file with all available options
+
+# Server settings
+server:
+  # Network binding
+  listen_address: "0.0.0.0"
+  listen_port: 8080
+  
+  # Connection settings
+  max_connections: 1000
+  request_timeout_ms: 100
+  
+  # Threading
+  thread_pool_size: 8  # 0 = auto-detect
+  max_batch_size: 1000
+  
+  # Data directory
+  data_directory: "./data"
+
+# Storage engine configuration
+storage:
+  # Engine type: lsm_tree, b_plus_tree, hash_table
+  engine_type: "lsm_tree"
+  
+  # LSM-Tree specific settings
+  memtable_size_mb: 64
+  max_sstables: 10
+  enable_compression: false
+  
+  # Persistence settings
+  wal_sync_interval_ms: 100
+  auto_flush_interval_ms: 5000
+  auto_compact_interval_hours: 24
+
+# Cluster configuration
+cluster:
+  # Node identification
+  node_id: "node1"
+  
+  # Seed nodes for cluster discovery
+  seed_nodes:
+    - "node2:8080"
+    - "node3:8080"
+  
+  # Cluster parameters
+  replication_factor: 3
+  shard_count: 1024
+  
+  # Timing settings
+  heartbeat_interval_ms: 1000
+  election_timeout_min_ms: 150
+  election_timeout_max_ms: 300
+  failure_detection_timeout_ms: 5000
+  
+  # Auto-rebalancing
+  enable_auto_rebalance: true
+  rebalance_trigger_threshold: 0.2  # 20% load imbalance
+
+# Security settings
+security:
+  # Authentication
+  enable_authentication: true
+  auth_token_secret: "your-secret-key-here"
+  token_expiry_hours: 24
+  
+  # Password policy
+  min_password_length: 8
+  require_special_chars: true
+  
+  # Audit logging
+  enable_audit_logging: true
+  audit_log_file: "logs/audit.log"
+
+# Monitoring and metrics
+monitoring:
+  enable_monitoring: true
+  metrics_port: 9090
+  
+  # Data retention
+  metric_retention_hours: 24
+  
+  # Hot key detection
+  hot_key_access_threshold: 1000
+  hot_key_rate_threshold: 100.0  # accesses per second
+  
+  # Alerting
+  alert_thresholds:
+    cpu_usage_percent: 80.0
+    memory_usage_percent: 85.0
+    disk_usage_percent: 90.0
+    error_rate_percent: 5.0
+    latency_p99_ms: 200.0
+
+# Logging configuration
+logging:
+  level: "info"  # debug, info, warn, error
+  file: "logs/cache_server.log"
+  max_size_mb: 100
+  max_files: 10
+  enable_console: true
+
+# Performance tuning
+performance:
+  # Memory settings
+  max_memory_usage_mb: 2048
+  cache_hit_ratio_target: 0.95
+  
+  # I/O settings
+  max_concurrent_reads: 100
+  max_concurrent_writes: 50
+  
+  # Network settings
+  tcp_nodelay: true
+  tcp_keepalive: true
+  send_buffer_size_kb: 64
+  recv_buffer_size_kb: 64
+
+# Advanced settings (use with caution)
+advanced:
+  # Garbage collection
+  gc_interval_ms: 30000
+  gc_memory_threshold_mb: 512
+  
+  # Debug options
+  enable_debug_mode: false
+  debug_port: 8888
+  
+  # Experimental features
+  enable_experimental_features: false
