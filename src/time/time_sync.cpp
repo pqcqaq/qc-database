@@ -216,7 +216,7 @@ Result<void> DefaultTimeService::sync_with_node(const NodeId& node_id) {
     auto measure_result = measure_offset_with_node(node_id);
     if (!measure_result.is_ok()) {
         sync_failures_++;
-        return measure_result;
+        return Result<void>::error(measure_result.status, measure_result.error_message);
     }
     
     auto offset = measure_result.data;

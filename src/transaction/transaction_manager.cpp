@@ -553,7 +553,7 @@ Result<void> DefaultTransactionManager::write(TransactionId tx_id, const MultiLe
     auto lock_result = lock_manager_->acquire_lock(tx_id, key, LockType::EXCLUSIVE, 
                                                   std::chrono::milliseconds(5000));
     if (!lock_result.is_ok()) {
-        return lock_result;
+        return Result<void>::error(lock_result.status, lock_result.error_message);
     }
     
     tx.held_locks.insert(lock_result.data);
@@ -586,7 +586,7 @@ Result<void> DefaultTransactionManager::remove(TransactionId tx_id, const MultiL
     auto lock_result = lock_manager_->acquire_lock(tx_id, key, LockType::EXCLUSIVE, 
                                                   std::chrono::milliseconds(5000));
     if (!lock_result.is_ok()) {
-        return lock_result;
+        return Result<void>::error(lock_result.status, lock_result.error_message);
     }
     
     tx.held_locks.insert(lock_result.data);
@@ -618,7 +618,7 @@ Result<void> DefaultTransactionManager::lock(TransactionId tx_id, const MultiLev
     auto lock_result = lock_manager_->acquire_lock(tx_id, key, type, 
                                                   std::chrono::milliseconds(5000));
     if (!lock_result.is_ok()) {
-        return lock_result;
+        return Result<void>::error(lock_result.status, lock_result.error_message);
     }
     
     tx.held_locks.insert(lock_result.data);

@@ -3,6 +3,7 @@
 #include <random>
 #include <chrono>
 #include <thread>
+#include <queue>
 
 namespace cache {
 namespace cluster {
