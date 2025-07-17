@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y \
     libgrpc++1 \
     libgrpc10 \
     ca-certificates \
-    curl \
+    netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
 # Create cache user
@@ -63,7 +63,7 @@ EXPOSE 8080 9090
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD nc -z localhost 8080 || exit 1
 
 # Default command
 CMD ["/opt/cache/bin/cache_server", "--config", "/opt/cache/config/cache_config.yaml"]

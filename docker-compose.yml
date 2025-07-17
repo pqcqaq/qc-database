@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Cache node 1 (seed node)
   cache-node1:
@@ -7,8 +5,8 @@ services:
     container_name: cache-node1
     hostname: cache-node1
     ports:
-      - "8080:8080"
-      - "9090:9090"
+      - "8081:8080"
+      - "9091:9090"
     environment:
       - NODE_ID=node1
       - LISTEN_PORT=8080
@@ -34,8 +32,8 @@ services:
     container_name: cache-node2
     hostname: cache-node2
     ports:
-      - "8081:8080"
-      - "9091:9090"
+      - "8082:8080"
+      - "9092:9090"
     environment:
       - NODE_ID=node2
       - LISTEN_PORT=8080
@@ -64,8 +62,8 @@ services:
     container_name: cache-node3
     hostname: cache-node3
     ports:
-      - "8082:8080"
-      - "9092:9090"
+      - "8083:8080"
+      - "9093:9090"
     environment:
       - NODE_ID=node3
       - LISTEN_PORT=8080
@@ -94,7 +92,7 @@ services:
     image: prom/prometheus:latest
     container_name: cache-prometheus
     ports:
-      - "9093:9090"
+      - "9090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus-data:/prometheus

@@ -1,0 +1,70 @@
+# 分布式缓存系统配置文件 - Node 2
+# 适用于银行金融场景的高性能、高可用性配置
+
+# 节点配置
+node:
+  node_id: "node2"
+  datacenter: "dc1"
+  rack: "rack1"
+  zone: "zone1"
+
+# 网络配置
+network:
+  listen_address: "0.0.0.0"
+  listen_port: 8080
+  max_connections: 10000
+  enable_ssl: false
+  connection_timeout_ms: 30000
+  request_timeout_ms: 10000
+  max_request_size_mb: 16
+  compression_enabled: true
+  compression_threshold_bytes: 1024
+
+# 存储引擎配置
+storage:
+  engine_type: "lsm_tree"
+  data_directory: "/opt/cache/data"
+  engine_options:
+    memtable_size_mb: 64
+    max_sstables: 10
+    enable_compression: true
+    compression_algorithm: "lz4"
+    bloom_filter_bits_per_key: 10
+    block_size_kb: 4
+    max_file_size_mb: 64
+    compaction_strategy: "leveled"
+    max_levels: 7
+
+# WAL配置
+wal:
+  enabled: true
+  wal_file: "/opt/cache/data/wal.log"
+  sync_mode: "fsync"
+  max_wal_size_mb: 1024
+  wal_segment_size_mb: 64
+  retention_period_hours: 24
+
+# 集群配置
+cluster:
+  enabled: true
+  cluster_name: "cache-cluster"
+  is_seed_node: false
+  seed_nodes: 
+    - "cache-node1:8080"
+  heartbeat_interval_ms: 1000
+  failure_detector_threshold: 8.0
+  gossip_interval_ms: 1000
+  max_gossip_peers: 3
+
+# 健康检查配置
+health:
+  enabled: true
+  port: 8080
+  endpoint: "/health"
+  interval_ms: 5000
+
+# 监控配置
+monitoring:
+  enabled: true
+  metrics_port: 9090
+  prometheus_enabled: true
