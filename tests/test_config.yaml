@@ -1,0 +1,131 @@
+# 分布式缓存数据库测试配置文件
+
+# 服务器配置
+servers:
+  - "http://localhost:8081"  # cache-node1
+  - "http://localhost:8082"  # cache-node2  
+  - "http://localhost:8083"  # cache-node3
+
+# 负载均衡器地址
+load_balancer: "http://localhost:8080"
+
+# 连接配置
+timeout: 30
+retry_count: 3
+
+# 基本测试配置
+test_duration_seconds: 60
+concurrent_clients: 10
+data_size_bytes: 1024
+key_prefix: "test"
+
+# 压力测试配置
+stress_test_ops: 10000      # 总操作数
+stress_test_threads: 50     # 并发线程数
+
+# 数据限制配置（根据系统规格设置）
+max_key_size: 256           # 最大键长度（字节）
+max_value_size: 4096        # 最大值长度（字节）
+
+# 测试场景配置
+test_scenarios:
+  # 基本功能测试
+  basic_tests:
+    enabled: true
+    test_data_sizes: [100, 512, 1024, 2048]
+    
+  # 批量操作测试  
+  batch_tests:
+    enabled: true
+    batch_sizes: [10, 50, 100]
+    
+  # 大数据测试
+  large_data_tests:
+    enabled: true
+    data_sizes: [1024, 4096, 8192, 16384]
+    
+  # 并发测试
+  concurrency_tests:
+    enabled: true
+    thread_counts: [1, 5, 10, 20, 50]
+    
+  # 集群测试
+  cluster_tests:
+    enabled: true
+    test_node_failures: true
+    test_network_partitions: false
+
+# 性能基准配置
+performance_benchmarks:
+  # QPS目标
+  target_read_qps: 2000
+  target_write_qps: 1000
+  
+  # 延迟目标（毫秒）
+  target_p99_latency_ms: 100
+  target_p999_latency_ms: 200
+  
+  # 成功率目标
+  target_success_rate: 0.999
+
+# 监控配置
+monitoring:
+  # Prometheus监控地址
+  prometheus_url: "http://localhost:9093"
+  
+  # Grafana仪表板地址
+  grafana_url: "http://localhost:3000"
+  
+  # 收集系统指标
+  collect_system_metrics: true
+  
+  # 监控间隔（秒）
+  metrics_interval: 5
+
+# 故障注入配置（用于弹性测试）
+fault_injection:
+  enabled: false
+  scenarios:
+    - name: "node_failure"
+      probability: 0.01  # 1%概率
+      duration_seconds: 30
+    - name: "network_delay"
+      probability: 0.05  # 5%概率  
+      delay_ms: 1000
+    - name: "memory_pressure"
+      probability: 0.02  # 2%概率
+      duration_seconds: 60
+
+# 数据一致性测试配置
+consistency_tests:
+  enabled: true
+  # 测试读写一致性
+  read_write_consistency: true
+  # 测试最终一致性
+  eventual_consistency: true
+  # 一致性检查超时（秒）
+  consistency_timeout: 30
+
+# 安全测试配置  
+security_tests:
+  enabled: false
+  # 认证测试
+  authentication_tests: true
+  # 授权测试
+  authorization_tests: true
+  # 注入恶意数据测试
+  malicious_data_tests: true
+
+# 报告配置
+reporting:
+  # 输出格式
+  formats: ["json", "html", "csv"]
+  
+  # 包含详细指标
+  include_detailed_metrics: true
+  
+  # 生成性能图表
+  generate_charts: true
+  
+  # 报告输出目录
+  output_directory: "./test_reports"
