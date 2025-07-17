@@ -35,14 +35,14 @@ Result<void> WAL::open() {
             // 文件不存在，创建新文件
             file_.open(filename_, std::ios::binary | std::ios::out);
             if (!file_.is_open()) {
-                return Result<void>(Status::STORAGE_ERROR, "Failed to create WAL file: " + filename_);
+                return Result<void>::error(Status::STORAGE_ERROR, "Failed to create WAL file: " + filename_);
             }
             file_.close();
             file_.open(filename_, std::ios::binary | std::ios::in | std::ios::out);
         }
         
         if (!file_.is_open()) {
-            return Result<void>(Status::STORAGE_ERROR, "Failed to open WAL file: " + filename_);
+            return Result<void>::error(Status::STORAGE_ERROR, "Failed to open WAL file: " + filename_);
         }
         
         // 移动到文件末尾准备追加
@@ -54,7 +54,7 @@ Result<void> WAL::open() {
         return Result<void>(Status::OK);
         
     } catch (const std::exception& e) {
-        return Result<void>(Status::STORAGE_ERROR, "Failed to open WAL: " + std::string(e.what()));
+        return Result<void>::error(Status::STORAGE_ERROR, "Failed to open WAL: " + std::string(e.what()));
     }
 }
 
@@ -76,7 +76,7 @@ Result<void> WAL::close() {
         return Result<void>(Status::OK);
         
     } catch (const std::exception& e) {
-        return Result<void>(Status::STORAGE_ERROR, "Failed to close WAL: " + std::string(e.what()));
+        return Result<void>::error(Status::STORAGE_ERROR, "Failed to close WAL: " + std::string(e.what()));
     }
 }
 
@@ -84,7 +84,7 @@ Result<void> WAL::append(const WALEntry& entry) {
     std::lock_guard<std::mutex> lock(mutex_);
     
     if (!is_open_) {
-        return Result<void>(Status::STORAGE_ERROR, "WAL is not open");
+        return Result<void>::error(Status::STORAGE_ERROR, "WAL is not open");
     }
     
     try {
@@ -111,7 +111,7 @@ Result<void> WAL::append(const WALEntry& entry) {
         return Result<void>(Status::OK);
         
     } catch (const std::exception& e) {
-        return Result<void>(Status::STORAGE_ERROR, "Failed to append to WAL: " + std::string(e.what()));
+        return Result<void>::error(Status::STORAGE_ERROR, "Failed to append to WAL: " + std::string(e.what()));
     }
 }
 
@@ -119,7 +119,7 @@ Result<void> WAL::sync() {
     std::lock_guard<std::mutex> lock(mutex_);
     
     if (!is_open_) {
-        return Result<void>(Status::STORAGE_ERROR, "WAL is not open");
+        return Result<void>::error(Status::STORAGE_ERROR, "WAL is not open");
     }
     
     try {
@@ -135,7 +135,7 @@ Result<void> WAL::sync() {
         return Result<void>(Status::OK);
         
     } catch (const std::exception& e) {
-        return Result<void>(Status::STORAGE_ERROR, "Failed to sync WAL: " + std::string(e.what()));
+        return Result<void>::error(Status::STORAGE_ERROR, "Failed to sync WAL: " + std::string(e.what()));
     }
 }
 
@@ -210,7 +210,7 @@ Result<void> WAL::truncate_from(uint64_t offset) {
     std::lock_guard<std::mutex> lock(mutex_);
     
     if (!is_open_) {
-        return Result<void>(Status::STORAGE_ERROR, "WAL is not open");
+        return Result<void>::error(Status::STORAGE_ERROR, "WAL is not open");
     }
     
     try {
@@ -220,7 +220,7 @@ Result<void> WAL::truncate_from(uint64_t offset) {
         // 重新打开文件进行截断
         std::fstream temp_file(filename_, std::ios::binary | std::ios::in | std::ios::out);
         if (!temp_file.is_open()) {
-            return Result<void>(Status::STORAGE_ERROR, "Failed to reopen WAL for truncation");
+            return Result<void>::error(Status::STORAGE_ERROR, "Failed to reopen WAL for truncation");
         }
         
         // 读取要保留的数据
@@ -232,7 +232,7 @@ Result<void> WAL::truncate_from(uint64_t offset) {
         // 重新创建文件并写入保留的数据
         std::ofstream output_file(filename_, std::ios::binary | std::ios::trunc);
         if (!output_file.is_open()) {
-            return Result<void>(Status::STORAGE_ERROR, "Failed to truncate WAL file");
+            return Result<void>::error(Status::STORAGE_ERROR, "Failed to truncate WAL file");
         }
         
         if (offset > 0) {
@@ -243,7 +243,7 @@ Result<void> WAL::truncate_from(uint64_t offset) {
         // 重新打开文件
         file_.open(filename_, std::ios::binary | std::ios::in | std::ios::out);
         if (!file_.is_open()) {
-            return Result<void>(Status::STORAGE_ERROR, "Failed to reopen WAL after truncation");
+            return Result<void>::error(Status::STORAGE_ERROR, "Failed to reopen WAL after truncation");
         }
         
         file_.seekp(0, std::ios::end);
@@ -252,7 +252,7 @@ Result<void> WAL::truncate_from(uint64_t offset) {
         return Result<void>(Status::OK);
         
     } catch (const std::exception& e) {
-        return Result<void>(Status::STORAGE_ERROR, "Failed to truncate WAL: " + std::string(e.what()));
+        return Result<void>::error(Status::STORAGE_ERROR, "Failed to truncate WAL: " + std::string(e.what()));
     }
 }
 
@@ -318,96 +318,96 @@ Result<void> WAL::serialize_entry(const WALEntry& entry, std::vector<uint8_t>& b
         return Result<void>(Status::OK);
         
     } catch (const std::exception& e) {
-        return Result<void>(Status::STORAGE_ERROR, "Failed to serialize WAL entry: " + std::string(e.what()));
+        return Result<void>::error(Status::STORAGE_ERROR, "Failed to serialize WAL entry: " + std::string(e.what()));
     }
 }
 
 Result<void> WAL::deserialize_entry(const std::vector<uint8_t>& buffer, WALEntry& entry) {
     try {
         if (buffer.empty()) {
-            return Result<void>(Status::INVALID_ARGUMENT, "Empty buffer for WAL entry deserialization");
+            return Result<void>::error(Status::INVALID_ARGUMENT, "Empty buffer for WAL entry deserialization");
         }
         
         size_t offset = 0;
         
         // Entry type
         if (offset >= buffer.size()) {
-            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing type");
+            return Result<void>::error(Status::STORAGE_ERROR, "Incomplete WAL entry: missing type");
         }
         entry.type = static_cast<WALEntryType>(buffer[offset++]);
         
         // Primary key
         uint32_t primary_key_length;
         if (!read_bytes(buffer, offset, reinterpret_cast<uint8_t*>(&primary_key_length), sizeof(primary_key_length))) {
-            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing primary key length");
+            return Result<void>::error(Status::STORAGE_ERROR, "Incomplete WAL entry: missing primary key length");
         }
         
         if (primary_key_length > config::MAX_KEY_SIZE) {
-            return Result<void>(Status::STORAGE_ERROR, "Invalid primary key length in WAL entry");
+            return Result<void>::error(Status::STORAGE_ERROR, "Invalid primary key length in WAL entry");
         }
         
         entry.key.primary_key.resize(primary_key_length);
         if (!read_bytes(buffer, offset, reinterpret_cast<uint8_t*>(&entry.key.primary_key[0]), primary_key_length)) {
-            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing primary key data");
+            return Result<void>::error(Status::STORAGE_ERROR, "Incomplete WAL entry: missing primary key data");
         }
         
         // Secondary key
         uint32_t secondary_key_length;
         if (!read_bytes(buffer, offset, reinterpret_cast<uint8_t*>(&secondary_key_length), sizeof(secondary_key_length))) {
-            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing secondary key length");
+            return Result<void>::error(Status::STORAGE_ERROR, "Incomplete WAL entry: missing secondary key length");
         }
         
         if (secondary_key_length > config::MAX_KEY_SIZE) {
-            return Result<void>(Status::STORAGE_ERROR, "Invalid secondary key length in WAL entry");
+            return Result<void>::error(Status::STORAGE_ERROR, "Invalid secondary key length in WAL entry");
         }
         
         entry.key.secondary_key.resize(secondary_key_length);
         if (!read_bytes(buffer, offset, reinterpret_cast<uint8_t*>(&entry.key.secondary_key[0]), secondary_key_length)) {
-            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing secondary key data");
+            return Result<void>::error(Status::STORAGE_ERROR, "Incomplete WAL entry: missing secondary key data");
         }
         
         // Value
         uint32_t value_length;
         if (!read_bytes(buffer, offset, reinterpret_cast<uint8_t*>(&value_length), sizeof(value_length))) {
-            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing value length");
+            return Result<void>::error(Status::STORAGE_ERROR, "Incomplete WAL entry: missing value length");
         }
         
         if (value_length > config::MAX_VALUE_SIZE) {
-            return Result<void>(Status::STORAGE_ERROR, "Invalid value length in WAL entry");
+            return Result<void>::error(Status::STORAGE_ERROR, "Invalid value length in WAL entry");
         }
         
         entry.data.value.resize(value_length);
         if (!read_bytes(buffer, offset, reinterpret_cast<uint8_t*>(&entry.data.value[0]), value_length)) {
-            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing value data");
+            return Result<void>::error(Status::STORAGE_ERROR, "Incomplete WAL entry: missing value data");
         }
         
         // Version
         if (!read_bytes(buffer, offset, reinterpret_cast<uint8_t*>(&entry.data.version), sizeof(entry.data.version))) {
-            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing version");
+            return Result<void>::error(Status::STORAGE_ERROR, "Incomplete WAL entry: missing version");
         }
         
         // Timestamp
         uint64_t timestamp_ms;
         if (!read_bytes(buffer, offset, reinterpret_cast<uint8_t*>(&timestamp_ms), sizeof(timestamp_ms))) {
-            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing timestamp");
+            return Result<void>::error(Status::STORAGE_ERROR, "Incomplete WAL entry: missing timestamp");
         }
         entry.data.timestamp = Timestamp(timestamp_ms);
         
         // Deleted flag
         if (offset >= buffer.size()) {
-            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing deleted flag");
+            return Result<void>::error(Status::STORAGE_ERROR, "Incomplete WAL entry: missing deleted flag");
         }
         entry.data.deleted = (buffer[offset++] != 0);
         
         // Transaction ID
         if (!read_bytes(buffer, offset, reinterpret_cast<uint8_t*>(&entry.transaction_id), sizeof(entry.transaction_id))) {
-            return Result<void>(Status::STORAGE_ERROR, "Incomplete WAL entry: missing transaction ID");
+            return Result<void>::error(Status::STORAGE_ERROR, "Incomplete WAL entry: missing transaction ID");
         }
         
         return Result<void>(Status::OK);
         
     } catch (const std::exception& e) {
-        return Result<void>(Status::STORAGE_ERROR, "Failed to deserialize WAL entry: " + std::string(e.what()));
+        return Result<void>::error(Status::STORAGE_ERROR, "Failed to deserialize WAL entry: " + std::string(e.what()));
     }
 }
 

@@ -1,2 +1,0 @@
-/usr/bin/ar qc libcache_core.a CMakeFiles/cache_core.dir/cache_server.cpp.o
-/usr/bin/ranlib libcache_core.a

@@ -1,2 +1,0 @@
-/usr/bin/ar qc libcache_cluster.a CMakeFiles/cache_cluster.dir/cluster/split_brain_detector.cpp.o
-/usr/bin/ranlib libcache_cluster.a

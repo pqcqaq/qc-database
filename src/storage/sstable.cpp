@@ -17,7 +17,7 @@ Result<void> SSTable::write(const std::map<MultiLevelKey, DataEntry>& data) {
     std::lock_guard<std::mutex> lock(mutex_);
     
     if (data.empty()) {
-        return Result<void>(Status::INVALID_ARGUMENT, "Cannot write empty data");
+        return Result<void>::error(Status::INVALID_ARGUMENT, "Cannot write empty data");
     }
     
     try {
@@ -28,7 +28,7 @@ Result<void> SSTable::write(const std::map<MultiLevelKey, DataEntry>& data) {
         // 打开文件进行写入
         std::ofstream file(filename_, std::ios::binary | std::ios::trunc);
         if (!file.is_open()) {
-            return Result<void>(Status::STORAGE_ERROR, "Failed to open SSTable file for writing: " + filename_);
+            return Result<void>::error(Status::STORAGE_ERROR, "Failed to open SSTable file for writing: " + filename_);
         }
         
         // 写入头部信息
@@ -104,7 +104,7 @@ Result<void> SSTable::write(const std::map<MultiLevelKey, DataEntry>& data) {
         return Result<void>(Status::OK);
         
     } catch (const std::exception& e) {
-        return Result<void>(Status::STORAGE_ERROR, "Failed to write SSTable: " + std::string(e.what()));
+        return Result<void>::error(Status::STORAGE_ERROR, "Failed to write SSTable: " + std::string(e.what()));
     }
 }
 
@@ -115,7 +115,7 @@ Result<DataEntry> SSTable::read(const MultiLevelKey& key) {
     if (index_.empty()) {
         auto load_result = load_index();
         if (!load_result.is_ok()) {
-            return Result<DataEntry>(load_result.status, load_result.error_message);
+            return Result<DataEntry>::error(load_result.status, load_result.error_message);
         }
     }
     
@@ -126,13 +126,13 @@ Result<DataEntry> SSTable::read(const MultiLevelKey& key) {
         });
     
     if (it == index_.end() || it->key != key) {
-        return Result<DataEntry>(Status::NOT_FOUND, "Key not found in SSTable");
+        return Result<DataEntry>::error(Status::NOT_FOUND, "Key not found in SSTable");
     }
     
     try {
         std::ifstream file(filename_, std::ios::binary);
         if (!file.is_open()) {
-            return Result<DataEntry>(Status::STORAGE_ERROR, "Failed to open SSTable file for reading");
+            return Result<DataEntry>::error(Status::STORAGE_ERROR, "Failed to open SSTable file for reading");
         }
         
         // 跳转到数据位置
@@ -145,7 +145,7 @@ Result<DataEntry> SSTable::read(const MultiLevelKey& key) {
         file.read(&read_key[0], key_size);
         
         if (read_key != key.to_string()) {
-            return Result<DataEntry>(Status::STORAGE_ERROR, "Key mismatch in SSTable");
+            return Result<DataEntry>::error(Status::STORAGE_ERROR, "Key mismatch in SSTable");
         }
         
         // 读取数据
@@ -168,13 +168,13 @@ Result<DataEntry> SSTable::read(const MultiLevelKey& key) {
         file.close();
         
         if (entry.deleted) {
-            return Result<DataEntry>(Status::NOT_FOUND, "Key is marked as deleted");
+            return Result<DataEntry>::error(Status::NOT_FOUND, "Key is marked as deleted");
         }
         
         return Result<DataEntry>(Status::OK, entry);
         
     } catch (const std::exception& e) {
-        return Result<DataEntry>(Status::STORAGE_ERROR, "Failed to read from SSTable: " + std::string(e.what()));
+        return Result<DataEntry>::error(Status::STORAGE_ERROR, "Failed to read from SSTable: " + std::string(e.what()));
     }
 }
 
@@ -186,7 +186,7 @@ SSTable::range_scan(const RangeQuery& query) {
     if (index_.empty()) {
         auto load_result = load_index();
         if (!load_result.is_ok()) {
-            return Result<std::vector<std::pair<MultiLevelKey, DataEntry>>>(
+            return Result<std::vector<std::pair<MultiLevelKey, DataEntry>>>::error(
                 load_result.status, load_result.error_message);
         }
     }
@@ -196,7 +196,7 @@ SSTable::range_scan(const RangeQuery& query) {
     try {
         std::ifstream file(filename_, std::ios::binary);
         if (!file.is_open()) {
-            return Result<std::vector<std::pair<MultiLevelKey, DataEntry>>>(
+            return Result<std::vector<std::pair<MultiLevelKey, DataEntry>>>::error(
                 Status::STORAGE_ERROR, "Failed to open SSTable file for reading");
         }
         
@@ -259,7 +259,7 @@ SSTable::range_scan(const RangeQuery& query) {
         return Result<std::vector<std::pair<MultiLevelKey, DataEntry>>>(Status::OK, results);
         
     } catch (const std::exception& e) {
-        return Result<std::vector<std::pair<MultiLevelKey, DataEntry>>>(
+        return Result<std::vector<std::pair<MultiLevelKey, DataEntry>>>::error(
             Status::STORAGE_ERROR, "Failed to scan SSTable: " + std::string(e.what()));
     }
 }
@@ -272,7 +272,7 @@ Result<void> SSTable::load_index() {
     try {
         std::ifstream file(filename_, std::ios::binary);
         if (!file.is_open()) {
-            return Result<void>(Status::STORAGE_ERROR, "Failed to open SSTable file");
+            return Result<void>::error(Status::STORAGE_ERROR, "Failed to open SSTable file");
         }
         
         // 验证文件头
@@ -282,11 +282,11 @@ Result<void> SSTable::load_index() {
         file.read(reinterpret_cast<char*>(&entry_count), sizeof(entry_count));
         
         if (magic_number != 0x5354414C) {
-            return Result<void>(Status::STORAGE_ERROR, "Invalid SSTable magic number");
+            return Result<void>::error(Status::STORAGE_ERROR, "Invalid SSTable magic number");
         }
         
         if (version != 1) {
-            return Result<void>(Status::STORAGE_ERROR, "Unsupported SSTable version");
+            return Result<void>::error(Status::STORAGE_ERROR, "Unsupported SSTable version");
         }
         
         // 读取索引偏移
@@ -333,7 +333,7 @@ Result<void> SSTable::load_index() {
         return Result<void>(Status::OK);
         
     } catch (const std::exception& e) {
-        return Result<void>(Status::STORAGE_ERROR, "Failed to load SSTable index: " + std::string(e.what()));
+        return Result<void>::error(Status::STORAGE_ERROR, "Failed to load SSTable index: " + std::string(e.what()));
     }
 }
 

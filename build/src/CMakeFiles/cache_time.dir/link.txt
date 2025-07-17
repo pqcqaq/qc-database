@@ -1,2 +1,0 @@
-/usr/bin/ar qc libcache_time.a CMakeFiles/cache_time.dir/time/time_sync.cpp.o
-/usr/bin/ranlib libcache_time.a

@@ -13,11 +13,11 @@ Result<DataEntry> MemTable::get(const MultiLevelKey& key) {
     
     auto it = data_.find(key);
     if (it == data_.end()) {
-        return Result<DataEntry>(Status::NOT_FOUND, "Key not found in memtable");
+        return Result<DataEntry>::error(Status::NOT_FOUND, "Key not found in memtable");
     }
     
     if (it->second.deleted) {
-        return Result<DataEntry>(Status::NOT_FOUND, "Key is marked as deleted");
+        return Result<DataEntry>::error(Status::NOT_FOUND, "Key is marked as deleted");
     }
     
     return Result<DataEntry>(Status::OK, it->second);
@@ -28,11 +28,11 @@ Result<void> MemTable::put(const MultiLevelKey& key, const DataEntry& entry) {
     
     // 检查key和value大小限制
     if (key.to_string().size() > config::MAX_KEY_SIZE) {
-        return Result<void>(Status::INVALID_ARGUMENT, "Key size exceeds limit");
+        return Result<void>::error(Status::INVALID_ARGUMENT, "Key size exceeds limit");
     }
     
     if (entry.value.size() > config::MAX_VALUE_SIZE) {
-        return Result<void>(Status::INVALID_ARGUMENT, "Value size exceeds limit");
+        return Result<void>::error(Status::INVALID_ARGUMENT, "Value size exceeds limit");
     }
     
     // 计算内存使用变化

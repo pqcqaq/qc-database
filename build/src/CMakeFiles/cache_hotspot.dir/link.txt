@@ -1,2 +1,0 @@
-/usr/bin/ar qc libcache_hotspot.a CMakeFiles/cache_hotspot.dir/hotspot/hotspot_manager.cpp.o
-/usr/bin/ranlib libcache_hotspot.a

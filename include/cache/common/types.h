@@ -38,6 +38,10 @@ struct MultiLevelKey {
         return primary_key == other.primary_key && secondary_key == other.secondary_key;
     }
     
+    bool operator!=(const MultiLevelKey& other) const {
+        return !(*this == other);
+    }
+    
     bool operator<(const MultiLevelKey& other) const {
         if (primary_key != other.primary_key) {
             return primary_key < other.primary_key;

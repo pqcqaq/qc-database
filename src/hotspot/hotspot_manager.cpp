@@ -143,7 +143,7 @@ Result<void> DefaultHotspotManager::handle_hotspot(const MultiLevelKey& key, Han
     
     auto it = detected_hotspots_.find(key);
     if (it == detected_hotspots_.end()) {
-        return Result<void>(Status::NOT_FOUND, "Key is not a hotspot: " + key.to_string());
+        return Result<void>::error(Status::NOT_FOUND, "Key is not a hotspot: " + key.to_string());
     }
     
     auto& hotspot = it->second;
@@ -695,8 +695,7 @@ Result<void> DefaultHotspotManager::apply_handling_strategy(HotspotInfo& hotspot
         case HandlingStrategy::RATE_LIMITING:
             return apply_rate_limiting_strategy(hotspot);
         default:
-            return Result<void>(Status::NOT_IMPLEMENTED, 
-                "Strategy not implemented: " + std::to_string(static_cast<int>(strategy)));
+            return Result<void>::error(Status::NOT_IMPLEMENTED, "Strategy not implemented: " + std::to_string(static_cast<int>(strategy)));
     }
 }
 
@@ -713,14 +712,14 @@ Result<void> DefaultHotspotManager::apply_replication_strategy(HotspotInfo& hots
         return Result<void>(Status::OK);
     }
     
-    return Result<void>(Status::NO_CHANGE, "Already at optimal replica count");
+    return Result<void>::error(Status::NO_CHANGE, "Already at optimal replica count");
 }
 
 Result<void> DefaultHotspotManager::apply_partitioning_strategy(HotspotInfo& hotspot) {
     // 分区策略：重新分区以分散负载
     auto stats_it = key_stats_.find(hotspot.key);
     if (stats_it == key_stats_.end()) {
-        return Result<void>(Status::NOT_FOUND, "Key stats not found");
+        return Result<void>::error(Status::NOT_FOUND, "Key stats not found");
     }
     
     const auto& stats = stats_it->second;
@@ -731,7 +730,7 @@ Result<void> DefaultHotspotManager::apply_partitioning_strategy(HotspotInfo& hot
         return Result<void>(Status::OK);
     }
     
-    return Result<void>(Status::INVALID_ARGUMENT, "No geographic distribution data for partitioning");
+    return Result<void>::error(Status::INVALID_ARGUMENT, "No geographic distribution data for partitioning");
 }
 
 Result<void> DefaultHotspotManager::apply_caching_strategy(HotspotInfo& hotspot) {
@@ -762,7 +761,7 @@ Result<void> DefaultHotspotManager::apply_rate_limiting_strategy(HotspotInfo& ho
     
     auto stats_it = key_stats_.find(hotspot.key);
     if (stats_it == key_stats_.end()) {
-        return Result<void>(Status::NOT_FOUND, "Key stats not found");
+        return Result<void>::error(Status::NOT_FOUND, "Key stats not found");
     }
     
     const auto& stats = stats_it->second;
@@ -774,8 +773,7 @@ Result<void> DefaultHotspotManager::apply_rate_limiting_strategy(HotspotInfo& ho
     return Result<void>(Status::OK);
 }
 
-size_t DefaultHotspotManager::count_recent_accesses(const MultiLevelKey& key, 
-                                                   std::chrono::milliseconds window) const {
+size_t DefaultHotspotManager::count_recent_accesses(const MultiLevelKey& key, std::chrono::milliseconds window) const {
     auto it = access_patterns_.find(key);
     if (it == access_patterns_.end()) {
         return 0;

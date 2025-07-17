@@ -34,6 +34,8 @@ public:
     size_t size() const { return size_; }
     const std::string& filename() const { return filename_; }
     
+    Result<void> load_index();
+    
 private:
     std::string filename_;
     std::vector<IndexEntry> index_;
@@ -41,7 +43,6 @@ private:
     std::mutex mutex_;
     
     Result<void> build_index();
-    Result<void> load_index();
     Result<void> save_index();
 };
 
