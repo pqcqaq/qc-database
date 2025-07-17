@@ -7,11 +7,11 @@ services:
     container_name: cache-node1
     hostname: cache-node1
     ports:
-      - "8080:8080"
+      - "8081:8081"
       - "9090:9090"
     environment:
       - NODE_ID=node1
-      - LISTEN_PORT=8080
+      - LISTEN_PORT=8081
       - DATA_DIR=/opt/cache/data
       - CLUSTER_SEEDS=
     volumes:
@@ -24,7 +24,7 @@ services:
       "/opt/cache/bin/cache_server",
       "--config", "/opt/cache/config/cache_config.yaml",
       "--node-id", "node1",
-      "--port", "8080",
+      "--port", "8081",
       "--data-dir", "/opt/cache/data"
     ]
 
@@ -34,13 +34,13 @@ services:
     container_name: cache-node2
     hostname: cache-node2
     ports:
-      - "8081:8080"
+      - "8082:8082"
       - "9091:9090"
     environment:
       - NODE_ID=node2
-      - LISTEN_PORT=8080
+      - LISTEN_PORT=8082
       - DATA_DIR=/opt/cache/data
-      - CLUSTER_SEEDS=cache-node1:8080
+      - CLUSTER_SEEDS=cache-node1:8081
     volumes:
       - cache-node2-data:/opt/cache/data
       - cache-node2-logs:/opt/cache/logs
@@ -53,9 +53,9 @@ services:
       "/opt/cache/bin/cache_server",
       "--config", "/opt/cache/config/cache_config.yaml",
       "--node-id", "node2",
-      "--port", "8080",
+      "--port", "8082",
       "--data-dir", "/opt/cache/data",
-      "--seeds", "cache-node1:8080"
+      "--seeds", "cache-node1:8081"
     ]
 
   # Cache node 3
@@ -64,13 +64,13 @@ services:
     container_name: cache-node3
     hostname: cache-node3
     ports:
-      - "8082:8080"
+      - "8083:8083"
       - "9092:9090"
     environment:
       - NODE_ID=node3
-      - LISTEN_PORT=8080
+      - LISTEN_PORT=8083
       - DATA_DIR=/opt/cache/data
-      - CLUSTER_SEEDS=cache-node1:8080,cache-node2:8080
+      - CLUSTER_SEEDS=cache-node1:8081,cache-node2:8082
     volumes:
       - cache-node3-data:/opt/cache/data
       - cache-node3-logs:/opt/cache/logs
@@ -84,9 +84,9 @@ services:
       "/opt/cache/bin/cache_server",
       "--config", "/opt/cache/config/cache_config.yaml",
       "--node-id", "node3",
-      "--port", "8080",
+      "--port", "8083",
       "--data-dir", "/opt/cache/data",
-      "--seeds", "cache-node1:8080,cache-node2:8080"
+      "--seeds", "cache-node1:8081,cache-node2:8082"
     ]
 
   # Prometheus for monitoring

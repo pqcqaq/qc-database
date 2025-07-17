@@ -8,16 +8,12 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
-  "/workspace/src/main.cpp" "CMakeFiles/cache_server.dir/src/main.cpp.o" "gcc" "CMakeFiles/cache_server.dir/src/main.cpp.o.d"
-  "" "cache_server" "gcc" "CMakeFiles/cache_server.dir/link.d"
+  "/mnt/d/Develop/Projects/qc-database/src/main.cpp" "CMakeFiles/cache_server.dir/src/main.cpp.o" "gcc" "CMakeFiles/cache_server.dir/src/main.cpp.o.d"
   )
 
-# Targets to which this target links which contain Fortran sources.
-set(CMAKE_Fortran_TARGET_LINKED_INFO_FILES
-  )
-
-# Targets to which this target links which contain Fortran sources.
-set(CMAKE_Fortran_TARGET_FORWARD_LINKED_INFO_FILES
+# Targets to which this target links.
+set(CMAKE_TARGET_LINKED_INFO_FILES
+  "/mnt/d/Develop/Projects/qc-database/build/src/CMakeFiles/cache_core.dir/DependInfo.cmake"
   )
 
 # Fortran module output directory.

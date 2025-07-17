@@ -1,6 +1,10 @@
 # Multi-stage build for Distributed Cache Server
 FROM ubuntu:22.04 AS builder
 
+# Switch to Chinese mirror for faster downloads
+RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+    sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
+
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -28,9 +32,13 @@ RUN mkdir build && cd build && \
 # Production image
 FROM ubuntu:22.04
 
+# Switch to Chinese mirror for faster downloads
+RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+    sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
+    
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
-    libprotobuf32 \
+    libprotobuf-dev \
     libgrpc++1 \
     libgrpc10 \
     ca-certificates \

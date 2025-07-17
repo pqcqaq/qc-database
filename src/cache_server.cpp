@@ -1,25 +1,30 @@
 #include "cache/cache_server.h"
-#include "cache/storage/wal.h"
-#include "cache/storage/lsm_tree.h"
-#include "cache/cluster/split_brain_detector.h"
-#include "cache/transaction/transaction_manager.h"
-#include "cache/time/time_sync.h"
-#include "cache/hotspot/hotspot_manager.h"
-#include <sstream>
-#include <iostream>
-#include <memory>
+
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
+#include <iostream>
+#include <memory>
+#include <sstream>
 #include <thread>
-#include <chrono>
+
+#include "cache/cluster/split_brain_detector.h"
+#include "cache/hotspot/hotspot_manager.h"
+#include "cache/storage/lsm_tree.h"
+#include "cache/storage/wal.h"
+#include "cache/time/time_sync.h"
+#include "cache/transaction/transaction_manager.h"
 
 namespace cache {
 
 // Static instance for signal handling
 CacheServer* CacheServer::instance_ = nullptr;
 
-CacheServer::CacheServer(const ServerConfig& config) 
-    : config_(config), is_running_(false), shutdown_requested_(false), stop_stats_collection_(false) {
+CacheServer::CacheServer(const ServerConfig& config)
+    : config_(config),
+      is_running_(false),
+      shutdown_requested_(false),
+      stop_stats_collection_(false) {
     instance_ = this;
     setup_signal_handlers();
 }
@@ -33,30 +38,31 @@ CacheServer::~CacheServer() {
 
 Result<void> CacheServer::start() {
     if (is_running_.load()) {
-        return Result<void>::error(Status::ALREADY_EXISTS, "Server is already running");
+        return Result<void>::error(Status::ALREADY_EXISTS,
+                                   "Server is already running");
     }
-    
+
     std::cout << "[INFO] Starting cache server..." << std::endl;
-    
+
     // Initialize components in order
     auto result = initialize_storage();
     if (!result.is_ok()) {
         return result;
     }
-    
+
     result = initialize_cluster();
     if (!result.is_ok()) {
         cleanup_storage();
         return result;
     }
-    
+
     result = initialize_security();
     if (!result.is_ok()) {
         cleanup_cluster();
         cleanup_storage();
         return result;
     }
-    
+
     result = initialize_monitoring();
     if (!result.is_ok()) {
         cleanup_security();
@@ -64,7 +70,7 @@ Result<void> CacheServer::start() {
         cleanup_storage();
         return result;
     }
-    
+
     result = initialize_network();
     if (!result.is_ok()) {
         cleanup_monitoring();
@@ -73,10 +79,10 @@ Result<void> CacheServer::start() {
         cleanup_storage();
         return result;
     }
-    
+
     start_stats_collection();
     is_running_.store(true);
-    
+
     std::cout << "[INFO] Cache server started successfully" << std::endl;
     return Result<void>(Status::OK);
 }
@@ -85,12 +91,12 @@ Result<void> CacheServer::stop() {
     if (!is_running_.load()) {
         return Result<void>(Status::OK);
     }
-    
+
     std::cout << "[INFO] Stopping cache server..." << std::endl;
-    
+
     is_running_.store(false);
     shutdown_requested_.store(true);
-    
+
     // Stop components in reverse order
     stop_stats_collection();
     cleanup_network();
@@ -98,7 +104,7 @@ Result<void> CacheServer::stop() {
     cleanup_security();
     cleanup_cluster();
     cleanup_storage();
-    
+
     std::cout << "[INFO] Cache server stopped" << std::endl;
     return Result<void>(Status::OK);
 }
@@ -108,13 +114,11 @@ Result<void> CacheServer::restart() {
     if (!stop_result.is_ok()) {
         return stop_result;
     }
-    
+
     return start();
 }
 
-bool CacheServer::is_running() const {
-    return is_running_.load();
-}
+bool CacheServer::is_running() const { return is_running_.load(); }
 
 Result<void> CacheServer::update_config(const ServerConfig& new_config) {
     config_ = new_config;
@@ -122,7 +126,8 @@ Result<void> CacheServer::update_config(const ServerConfig& new_config) {
 }
 
 Result<void> CacheServer::reload_config(const std::string& config_file) {
-    return Result<void>::error(Status::NOT_IMPLEMENTED, "Config reload not implemented");
+    return Result<void>::error(Status::NOT_IMPLEMENTED,
+                               "Config reload not implemented");
 }
 
 ServerStats CacheServer::get_stats() const {
@@ -135,49 +140,61 @@ std::string CacheServer::get_health_status() const {
 }
 
 Result<void> CacheServer::flush_all_data() {
-    return Result<void>::error(Status::NOT_IMPLEMENTED, "Flush all data not implemented");
+    return Result<void>::error(Status::NOT_IMPLEMENTED,
+                               "Flush all data not implemented");
 }
 
 Result<void> CacheServer::compact_storage() {
-    return Result<void>::error(Status::NOT_IMPLEMENTED, "Compact storage not implemented");
+    return Result<void>::error(Status::NOT_IMPLEMENTED,
+                               "Compact storage not implemented");
 }
 
 Result<void> CacheServer::backup_data(const std::string& backup_path) {
-    return Result<void>::error(Status::NOT_IMPLEMENTED, "Backup not implemented");
+    return Result<void>::error(Status::NOT_IMPLEMENTED,
+                               "Backup not implemented");
 }
 
 Result<void> CacheServer::restore_data(const std::string& backup_path) {
-    return Result<void>::error(Status::NOT_IMPLEMENTED, "Restore not implemented");
+    return Result<void>::error(Status::NOT_IMPLEMENTED,
+                               "Restore not implemented");
 }
 
 Result<void> CacheServer::join_cluster() {
-    return Result<void>::error(Status::NOT_IMPLEMENTED, "Join cluster not implemented");
+    return Result<void>::error(Status::NOT_IMPLEMENTED,
+                               "Join cluster not implemented");
 }
 
 Result<void> CacheServer::leave_cluster() {
-    return Result<void>::error(Status::NOT_IMPLEMENTED, "Leave cluster not implemented");
+    return Result<void>::error(Status::NOT_IMPLEMENTED,
+                               "Leave cluster not implemented");
 }
 
 Result<void> CacheServer::trigger_rebalance() {
-    return Result<void>::error(Status::NOT_IMPLEMENTED, "Trigger rebalance not implemented");
+    return Result<void>::error(Status::NOT_IMPLEMENTED,
+                               "Trigger rebalance not implemented");
 }
 
 std::vector<cluster::NodeInfo> CacheServer::get_cluster_nodes() const {
     return {};
 }
 
-Result<void> CacheServer::create_user(const std::string& username, const std::string& password,
-                                     const std::unordered_set<security::Permission>& permissions) {
-    return Result<void>::error(Status::NOT_IMPLEMENTED, "Create user not implemented");
+Result<void> CacheServer::create_user(
+    const std::string& username, const std::string& password,
+    const std::unordered_set<security::Permission>& permissions) {
+    return Result<void>::error(Status::NOT_IMPLEMENTED,
+                               "Create user not implemented");
 }
 
 Result<void> CacheServer::delete_user(const std::string& username) {
-    return Result<void>::error(Status::NOT_IMPLEMENTED, "Delete user not implemented");
+    return Result<void>::error(Status::NOT_IMPLEMENTED,
+                               "Delete user not implemented");
 }
 
-Result<void> CacheServer::update_user_permissions(const std::string& username,
-                                                  const std::unordered_set<security::Permission>& permissions) {
-    return Result<void>::error(Status::NOT_IMPLEMENTED, "Update user permissions not implemented");
+Result<void> CacheServer::update_user_permissions(
+    const std::string& username,
+    const std::unordered_set<security::Permission>& permissions) {
+    return Result<void>::error(Status::NOT_IMPLEMENTED,
+                               "Update user permissions not implemented");
 }
 
 std::vector<monitoring::Alert> CacheServer::get_active_alerts() const {
@@ -272,7 +289,8 @@ void CacheServer::setup_signal_handlers() {
 
 void CacheServer::signal_handler(int signal) {
     if (instance_) {
-        std::cout << "[INFO] Received signal " << signal << ", shutting down gracefully..." << std::endl;
+        std::cout << "[INFO] Received signal " << signal
+                  << ", shutting down gracefully..." << std::endl;
         instance_->shutdown_requested_.store(true);
         if (instance_->shutdown_handler_) {
             instance_->shutdown_handler_();
@@ -285,18 +303,18 @@ void CacheServer::signal_handler(int signal) {
 namespace config {
 
 Result<ServerConfig> parse_config_file(const std::string& filename) {
-    return Result<ServerConfig>::error(Status::NOT_IMPLEMENTED, "Config file parsing not implemented");
+    return Result<ServerConfig>::error(Status::NOT_IMPLEMENTED,
+                                       "Config file parsing not implemented");
 }
 
 Result<void> validate_config(const ServerConfig& config) {
     return Result<void>(Status::OK);
 }
 
-std::string generate_default_config() {
-    return "# Default configuration\n";
-}
+std::string generate_default_config() { return "# Default configuration\n"; }
 
-std::string get_env_var(const std::string& name, const std::string& default_value) {
+std::string get_env_var(const std::string& name,
+                        const std::string& default_value) {
     const char* value = std::getenv(name.c_str());
     return value ? std::string(value) : default_value;
 }
@@ -305,30 +323,36 @@ void apply_env_overrides(ServerConfig& config) {
     // Apply environment variable overrides
 }
 
-} // namespace config
+}  // namespace config
 
 // ServerConfig implementation
-Result<ServerConfig> ServerConfig::load_from_file(const std::string& config_file) {
+Result<ServerConfig> ServerConfig::load_from_file(
+    const std::string& config_file) {
     // Simple implementation - just return default config
     ServerConfig config;
-    std::cout << "[INFO] Loading configuration from " << config_file << " (using defaults)" << std::endl;
+    std::cout << "[INFO] Loading configuration from " << config_file
+              << " (using defaults)" << std::endl;
     return Result<ServerConfig>(Status::OK, config);
 }
 
 Result<void> ServerConfig::save_to_file(const std::string& config_file) const {
-    std::cout << "[INFO] Saving configuration to " << config_file << " (not implemented)" << std::endl;
-    return Result<void>::error(Status::NOT_IMPLEMENTED, "Save to file not implemented");
+    std::cout << "[INFO] Saving configuration to " << config_file
+              << " (not implemented)" << std::endl;
+    return Result<void>::error(Status::NOT_IMPLEMENTED,
+                               "Save to file not implemented");
 }
 
 Result<void> ServerConfig::validate() const {
     // Simple validation
     if (listen_port == 0) {
-        return Result<void>::error(Status::INVALID_ARGUMENT, "Invalid listen port");
+        return Result<void>::error(Status::INVALID_ARGUMENT,
+                                   "Invalid listen port");
     }
     if (data_directory.empty()) {
-        return Result<void>::error(Status::INVALID_ARGUMENT, "Data directory cannot be empty");
+        return Result<void>::error(Status::INVALID_ARGUMENT,
+                                   "Data directory cannot be empty");
     }
     return Result<void>(Status::OK);
 }
 
-} // namespace cache
+}  // namespace cache

@@ -1,0 +1,263 @@
+# 分布式缓存系统配置文件
+# 适用于银行金融场景的高性能、高可用性配置
+
+# 节点配置
+node:
+  node_id: "cache-node-001"
+  datacenter: "dc1"
+  rack: "rack1"
+  zone: "zone1"
+
+# 网络配置
+network:
+  listen_address: "0.0.0.0"
+  listen_port: 8083
+  max_connections: 10000
+  enable_ssl: true
+  ssl_cert_file: "/etc/ssl/certs/cache-server.crt"
+  ssl_key_file: "/etc/ssl/private/cache-server.key"
+  connection_timeout_ms: 30000
+  request_timeout_ms: 10000
+  max_request_size_mb: 16
+  compression_enabled: true
+  compression_threshold_bytes: 1024
+
+# 存储引擎配置
+storage:
+  engine_type: "lsm_tree"
+  data_directory: "/var/lib/cache/data"
+  # LSM树特定配置
+  engine_options:
+    memtable_size_mb: 64
+    max_sstables: 10
+    enable_compression: true
+    compression_algorithm: "lz4"
+    bloom_filter_bits_per_key: 10
+    block_size_kb: 4
+    max_file_size_mb: 64
+    compaction_strategy: "leveled"
+    max_levels: 7
+
+# WAL配置
+wal:
+  enabled: true
+  wal_file: "/var/lib/cache/wal/wal.log"
+  sync_mode: "fsync"  # fsync, fdatasync, async
+  max_wal_size_mb: 1024
+  wal_segment_size_mb: 64
+  retention_period_hours: 24
+
+# 集群配置
+cluster:
+  enable_clustering: true
+  cluster_name: "banking-cache-cluster"
+  replication_factor: 3
+  consistency_level: "quorum"  # one, quorum, all
+  seed_nodes:
+    - "cache-node-002:8080"
+    - "cache-node-003:8080"
+  heartbeat_interval_ms: 1000
+  failure_detector_threshold: 8.0
+  gossip_interval_ms: 1000
+  
+  # 分片配置
+  sharding:
+    strategy: "consistent_hash"  # consistent_hash, range, hash
+    virtual_nodes: 256
+    rebalance_enabled: true
+    rebalance_threshold: 0.1
+    max_rebalance_concurrent: 2
+
+# 脑裂检测配置
+split_brain:
+  heartbeat_timeout_ms: 5000
+  split_detection_timeout_ms: 10000
+  max_missed_heartbeats: 3
+  quorum_strategy: "majority"  # majority, static, dynamic, witness
+  min_quorum_size: 2
+  auto_recovery_enabled: true
+  recovery_timeout_ms: 30000
+  max_recovery_attempts: 3
+
+# 事务配置
+transaction:
+  enable_transactions: true
+  default_isolation_level: "read_committed"  # read_uncommitted, read_committed, repeatable_read, serializable
+  default_timeout_ms: 30000
+  max_concurrent_transactions: 1000
+  deadlock_detection_enabled: true
+  deadlock_detection_interval_ms: 5000
+
+# 时间同步配置
+time_sync:
+  sync_interval_ms: 5000
+  max_clock_drift_ms: 100
+  sync_timeout_ms: 1000
+  min_samples: 3
+  enable_ntp_sync: true
+  ntp_servers:
+    - "pool.ntp.org"
+    - "time.google.com"
+  ntp_sync_interval_ms: 300000
+  offset_filter_alpha: 0.125
+  max_offset_age_ms: 60000
+  enable_hybrid_logical_clock: true
+
+# 热点检测配置
+hotspot_detection:
+  warm_threshold: 1000
+  hot_threshold: 5000
+  critical_threshold: 20000
+  detection_window_ms: 60000
+  cooling_period_ms: 300000
+  max_node_access_ratio: 0.7
+  min_nodes_for_distribution: 2
+  enable_pattern_detection: true
+  burst_detection_window_ms: 10000
+  burst_multiplier: 5.0
+
+# 热点处理配置
+hotspot_handling:
+  max_replicas: 5
+  min_replicas_for_hot: 3
+  local_cache_size: 10000
+  cache_ttl_ms: 300000
+  max_qps_per_key: 10000
+  rate_limit_window_ms: 1000
+  enable_key_partitioning: true
+  max_partitions_per_key: 4
+  auto_handle_hotspots: true
+  preferred_strategies:
+    - "replication"
+    - "caching"
+
+# 安全配置
+security:
+  enable_authentication: true
+  enable_authorization: true
+  token_expiry_hours: 24
+  max_login_attempts: 5
+  lockout_duration_minutes: 30
+  encryption_algorithm: "AES-256-GCM"
+  key_rotation_interval_hours: 168  # 7 days
+  audit_log_enabled: true
+  audit_log_file: "/var/log/cache/audit.log"
+
+# 监控配置
+monitoring:
+  enable_metrics: true
+  metrics_port: 9090
+  metrics_path: "/metrics"
+  enable_prometheus: true
+  enable_jaeger: true
+  jaeger_endpoint: "http://jaeger:14268/api/traces"
+  log_level: "info"  # debug, info, warn, error
+  log_file: "/var/log/cache/cache-server.log"
+  log_rotation_size_mb: 100
+  log_retention_days: 30
+
+# 性能配置
+performance:
+  max_memory_usage_mb: 8192
+  gc_interval_minutes: 10
+  compaction_threads: 4
+  flush_threads: 2
+  read_threads: 8
+  write_threads: 4
+  max_range_scan_limit: 10000
+  batch_size: 1000
+  prefetch_enabled: true
+  prefetch_size: 16
+
+# 限流配置
+rate_limiting:
+  enable_rate_limiting: true
+  default_qps_per_client: 1000
+  burst_capacity: 2000
+  window_size_ms: 1000
+  cleanup_interval_ms: 60000
+
+# 缓存配置
+cache:
+  enable_l1_cache: true
+  l1_cache_size_mb: 512
+  l1_cache_ttl_ms: 300000
+  enable_l2_cache: true
+  l2_cache_size_mb: 2048
+  l2_cache_ttl_ms: 1800000
+  eviction_policy: "lru"  # lru, lfu, fifo, random
+
+# 调试配置
+debug:
+  enable_debug_logging: false
+  enable_profiling: false
+  profiling_port: 6060
+  enable_pprof: false
+  slow_query_threshold_ms: 1000
+  enable_query_logging: false
+
+# 备份配置
+backup:
+  enable_backup: true
+  backup_interval_hours: 6
+  backup_directory: "/var/backup/cache"
+  retention_days: 7
+  compression_enabled: true
+  incremental_backup_enabled: true
+
+# 恢复配置
+recovery:
+  enable_auto_recovery: true
+  recovery_timeout_ms: 300000
+  max_recovery_attempts: 3
+  recovery_parallelism: 4
+  
+# 数据大小限制
+limits:
+  max_key_size_bytes: 256
+  max_value_size_bytes: 4096
+  max_batch_size: 1000
+  max_concurrent_requests: 10000
+
+# 运维配置
+operations:
+  enable_admin_api: true
+  admin_api_port: 8081
+  enable_health_check: true
+  health_check_port: 8082
+  graceful_shutdown_timeout_ms: 30000
+
+# 示例配置覆盖（用于不同环境）
+environments:
+  development:
+    storage:
+      engine_options:
+        memtable_size_mb: 16
+    cluster:
+      enable_clustering: false
+    security:
+      enable_authentication: false
+    monitoring:
+      log_level: "debug"
+      
+  testing:
+    storage:
+      data_directory: "/tmp/cache-test/data"
+    cluster:
+      replication_factor: 1
+    performance:
+      max_memory_usage_mb: 1024
+      
+  production:
+    storage:
+      engine_options:
+        memtable_size_mb: 128
+    cluster:
+      replication_factor: 3
+    security:
+      enable_authentication: true
+      enable_authorization: true
+    monitoring:
+      log_level: "info"
+    performance:
+      max_memory_usage_mb: 16384

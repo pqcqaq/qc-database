@@ -1,5 +1,4 @@
 file(REMOVE_RECURSE
-  "CMakeFiles/cache_server.dir/link.d"
   "CMakeFiles/cache_server.dir/src/main.cpp.o"
   "CMakeFiles/cache_server.dir/src/main.cpp.o.d"
   "cache_server"

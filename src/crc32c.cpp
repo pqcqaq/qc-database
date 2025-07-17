@@ -11,7 +11,7 @@ static bool table_initialized = false;
 
 static void init_table() {
     if (table_initialized) return;
-    
+
     for (int i = 0; i < 256; i++) {
         uint32_t crc = i;
         for (int j = 0; j < 8; j++) {
@@ -28,7 +28,7 @@ static void init_table() {
 
 uint32_t Crc32c(const char* data, size_t length) {
     init_table();
-    
+
     uint32_t crc = 0xFFFFFFFF;
     for (size_t i = 0; i < length; i++) {
         uint8_t byte = static_cast<uint8_t>(data[i]);
@@ -39,7 +39,7 @@ uint32_t Crc32c(const char* data, size_t length) {
 
 uint32_t Extend(uint32_t crc, const char* data, size_t length) {
     init_table();
-    
+
     crc ^= 0xFFFFFFFF;
     for (size_t i = 0; i < length; i++) {
         uint8_t byte = static_cast<uint8_t>(data[i]);
@@ -48,4 +48,4 @@ uint32_t Extend(uint32_t crc, const char* data, size_t length) {
     return crc ^ 0xFFFFFFFF;
 }
 
-} // namespace crc32c
+}  // namespace crc32c
