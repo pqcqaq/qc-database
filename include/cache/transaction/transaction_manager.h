@@ -8,6 +8,7 @@
 #include <chrono>
 #include <atomic>
 #include <mutex>
+#include <shared_mutex>
 #include <functional>
 
 namespace cache {

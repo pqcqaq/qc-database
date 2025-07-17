@@ -6,6 +6,7 @@
 #include <unordered_set>
 #include <memory>
 #include <chrono>
+#include <shared_mutex>
 
 namespace cache {
 namespace security {

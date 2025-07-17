@@ -24,8 +24,6 @@ include_directories(${CMAKE_SOURCE_DIR}/src)
 
 # Add subdirectories
 add_subdirectory(src)
-add_subdirectory(tests)
-add_subdirectory(examples)
 
 # Main executable
 add_executable(cache_server
@@ -34,13 +32,7 @@ add_executable(cache_server
 
 target_link_libraries(cache_server
     cache_core
-    cache_network
-    cache_storage
-    cache_cluster
-    cache_monitoring
     Threads::Threads
-    ${Protobuf_LIBRARIES}
-    gRPC::grpc++
 )
 
 # Install targets

@@ -1,0 +1,2 @@
+/usr/bin/ar qc libcache_transaction.a CMakeFiles/cache_transaction.dir/transaction/transaction_manager.cpp.o
+/usr/bin/ranlib libcache_transaction.a

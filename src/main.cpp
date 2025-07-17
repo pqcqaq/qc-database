@@ -2,6 +2,7 @@
 #include "cache/common/types.h"
 #include <iostream>
 #include <string>
+#include <sstream>
 #include <signal.h>
 #include <unistd.h>
 #include <getopt.h>

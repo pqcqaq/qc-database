@@ -1,0 +1,2 @@
+/usr/bin/ar qc libcache_storage.a CMakeFiles/cache_storage.dir/storage/storage_engine_factory.cpp.o CMakeFiles/cache_storage.dir/storage/lsm_tree.cpp.o CMakeFiles/cache_storage.dir/storage/memtable.cpp.o CMakeFiles/cache_storage.dir/storage/sstable.cpp.o CMakeFiles/cache_storage.dir/storage/wal.cpp.o
+/usr/bin/ranlib libcache_storage.a

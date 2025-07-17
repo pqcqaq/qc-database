@@ -7,6 +7,7 @@
 #include <vector>
 #include <unordered_set>
 #include <functional>
+#include <shared_mutex>
 
 namespace cache {
 namespace cluster {
