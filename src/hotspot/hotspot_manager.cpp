@@ -10,6 +10,31 @@
 namespace cache {
 namespace hotspot {
 
+// Simple DefaultHotspotHandler implementation
+class DefaultHotspotHandler : public HotspotHandler {
+public:
+    Result<void> apply_strategy(const MultiLevelKey& key, HotspotStrategy strategy) override {
+        // Simple implementation - in a real system this would integrate with the cache system
+        return Result<void>(Status::OK);
+    }
+    
+    Result<void> remove_strategy(const MultiLevelKey& key, HotspotStrategy strategy) override {
+        return Result<void>(Status::OK);
+    }
+    
+    std::vector<HotspotStrategy> get_applied_strategies(const MultiLevelKey& key) const override {
+        return {};
+    }
+    
+    bool is_strategy_applied(const MultiLevelKey& key, HotspotStrategy strategy) const override {
+        return false;
+    }
+    
+    double evaluate_strategy_effectiveness(const MultiLevelKey& key, HotspotStrategy strategy) const override {
+        return 1.0;
+    }
+};
+
 // DefaultHotspotManager 实现
 
 DefaultHotspotManager::DefaultHotspotManager() 
@@ -97,16 +122,13 @@ std::vector<HotspotKeyInfo> DefaultHotspotManager::detect_hotspots() {
     }
     
     // 获取访问统计并检测热点
-    auto key_stats = access_recorder_->get_key_statistics();
+    auto top_keys = access_recorder_->get_top_keys(1000); // Get top accessed keys
     
-    for (const auto& [key, stats] : key_stats) {
-        HotspotKeyInfo key_info;
-        key_info.key = key;
-        key_info.access_count = stats.total_accesses;
-        key_info.last_access_time = stats.last_access_time;
-        key_info.hotspot_level = calculate_hotspot_level(key_info);
+    for (const auto& key : top_keys) {
+        HotspotKeyInfo key_info = access_recorder_->get_key_stats(key);
+        key_info.level = calculate_hotspot_level(key_info);
         
-        if (key_info.hotspot_level != HotspotLevel::NONE) {
+        if (key_info.level != HotspotLevel::NORMAL) {
             result.push_back(key_info);
         }
     }
@@ -132,10 +154,10 @@ HotspotLevel DefaultHotspotManager::get_hotspot_level(const MultiLevelKey& key) 
     
     auto it = current_hotspots_.find(key);
     if (it != current_hotspots_.end()) {
-        return it->second.hotspot_level;
+        return it->second.level;
     }
     
-    return HotspotLevel::NONE;
+    return HotspotLevel::NORMAL;
 }
 
 Result<void> DefaultHotspotManager::handle_hotspot(const MultiLevelKey& key, 
@@ -147,7 +169,7 @@ Result<void> DefaultHotspotManager::handle_hotspot(const MultiLevelKey& key,
     auto strategies_to_use = strategies;
     if (strategies_to_use.empty()) {
         // 使用默认策略
-        strategies_to_use = {HotspotStrategy::REPLICATE, HotspotStrategy::LOAD_BALANCE};
+        strategies_to_use = {HotspotStrategy::REPLICATION, HotspotStrategy::LOAD_BALANCING};
     }
     
     for (auto strategy : strategies_to_use) {
@@ -178,7 +200,7 @@ std::vector<MultiLevelKey> DefaultHotspotManager::get_top_accessed_keys(size_t l
         return {};
     }
     
-    return access_recorder_->get_top_accessed_keys(limit);
+    return access_recorder_->get_top_keys(limit);
 }
 
 HotspotKeyInfo DefaultHotspotManager::get_key_info(const MultiLevelKey& key) const {
@@ -189,19 +211,14 @@ HotspotKeyInfo DefaultHotspotManager::get_key_info(const MultiLevelKey& key) con
         return it->second;
     }
     
-    // 如果不是当前热点，返回基本信息
+    // 如果不是当前热点，从访问记录器获取信息
     HotspotKeyInfo info;
-    info.key = key;
-    info.hotspot_level = HotspotLevel::NONE;
-    info.access_count = 0;
-    
     if (access_recorder_) {
-        auto stats = access_recorder_->get_key_statistics();
-        auto stats_it = stats.find(key);
-        if (stats_it != stats.end()) {
-            info.access_count = stats_it->second.total_accesses;
-            info.last_access_time = stats_it->second.last_access_time;
-        }
+        info = access_recorder_->get_key_stats(key);
+    } else {
+        info.key = key;
+        info.level = HotspotLevel::NORMAL;
+        info.total_access_count = 0;
     }
     
     return info;
@@ -242,7 +259,7 @@ void DefaultHotspotManager::detection_loop() {
             // 日志记录错误
         }
         
-        std::this_thread::sleep_for(std::chrono::milliseconds(detection_config_.detection_interval_ms));
+        std::this_thread::sleep_for(detection_config_.detection_window);
     }
 }
 
@@ -254,7 +271,7 @@ void DefaultHotspotManager::handling_loop() {
             {
                 std::shared_lock<std::shared_mutex> lock(mutex_);
                 for (const auto& [key, hotspot] : current_hotspots_) {
-                    if (hotspot.hotspot_level >= HotspotLevel::HIGH) {
+                    if (hotspot.level >= HotspotLevel::HOT) {
                         hotspots_to_handle.push_back(hotspot);
                     }
                 }
@@ -268,7 +285,7 @@ void DefaultHotspotManager::handling_loop() {
             // 日志记录错误
         }
         
-        std::this_thread::sleep_for(std::chrono::milliseconds(handling_config_.handling_interval_ms));
+        std::this_thread::sleep_for(handling_config_.rate_limit_window);
     }
 }
 
@@ -282,9 +299,9 @@ void DefaultHotspotManager::cleanup_loop() {
             auto it = current_hotspots_.begin();
             while (it != current_hotspots_.end()) {
                 auto time_diff = std::chrono::duration_cast<std::chrono::minutes>(
-                    now - it->second.last_access_time).count();
+                    now - it->second.last_access).count();
                 
-                if (time_diff > detection_config_.hotspot_expire_minutes) {
+                if (time_diff > std::chrono::duration_cast<std::chrono::minutes>(detection_config_.cooling_period).count()) {
                     notify_hotspot_resolved(it->first);
                     it = current_hotspots_.erase(it);
                 } else {
@@ -292,8 +309,8 @@ void DefaultHotspotManager::cleanup_loop() {
                 }
             }
             
-            // 清理过期的事件
-            while (recent_events_.size() > handling_config_.max_events_history) {
+            // 清理过期的事件 (使用固定大小限制，因为配置中没有max_events_history字段)
+            while (recent_events_.size() > 1000) {
                 recent_events_.pop();
             }
             
@@ -307,17 +324,15 @@ void DefaultHotspotManager::cleanup_loop() {
 
 HotspotLevel DefaultHotspotManager::calculate_hotspot_level(const HotspotKeyInfo& key_info) const {
     // 简化的热点等级计算
-    if (key_info.access_count >= detection_config_.critical_threshold) {
+    if (key_info.total_access_count >= detection_config_.critical_threshold) {
         return HotspotLevel::CRITICAL;
-    } else if (key_info.access_count >= detection_config_.high_threshold) {
-        return HotspotLevel::HIGH;
-    } else if (key_info.access_count >= detection_config_.medium_threshold) {
-        return HotspotLevel::MEDIUM;
-    } else if (key_info.access_count >= detection_config_.low_threshold) {
-        return HotspotLevel::LOW;
+    } else if (key_info.total_access_count >= detection_config_.hot_threshold) {
+        return HotspotLevel::HOT;
+    } else if (key_info.total_access_count >= detection_config_.warm_threshold) {
+        return HotspotLevel::WARM;
     }
     
-    return HotspotLevel::NONE;
+    return HotspotLevel::NORMAL;
 }
 
 AccessPattern DefaultHotspotManager::detect_access_pattern(const HotspotKeyInfo& key_info) const {
@@ -328,15 +343,15 @@ AccessPattern DefaultHotspotManager::detect_access_pattern(const HotspotKeyInfo&
 std::vector<HotspotStrategy> DefaultHotspotManager::select_strategies(const HotspotKeyInfo& hotspot) const {
     std::vector<HotspotStrategy> strategies;
     
-    switch (hotspot.hotspot_level) {
+    switch (hotspot.level) {
         case HotspotLevel::CRITICAL:
-            strategies = {HotspotStrategy::REPLICATE, HotspotStrategy::PARTITION, HotspotStrategy::LOAD_BALANCE};
+            strategies = {HotspotStrategy::REPLICATION, HotspotStrategy::PARTITIONING, HotspotStrategy::LOAD_BALANCING};
             break;
-        case HotspotLevel::HIGH:
-            strategies = {HotspotStrategy::REPLICATE, HotspotStrategy::LOAD_BALANCE};
+        case HotspotLevel::HOT:
+            strategies = {HotspotStrategy::REPLICATION, HotspotStrategy::LOAD_BALANCING};
             break;
-        case HotspotLevel::MEDIUM:
-            strategies = {HotspotStrategy::LOAD_BALANCE};
+        case HotspotLevel::WARM:
+            strategies = {HotspotStrategy::LOAD_BALANCING};
             break;
         default:
             break;
@@ -358,38 +373,56 @@ void DefaultHotspotManager::add_event(const HotspotEvent& event) {
     recent_events_.push(event);
     
     if (event_handler_) {
-        event_handler_->handle_event(event);
+        // Call appropriate method based on event type
+        switch (event.type) {
+            case HotspotEvent::HOTSPOT_DETECTED:
+                // We need the hotspot info, so this should be called from the specific notify methods
+                break;
+            case HotspotEvent::HOTSPOT_RESOLVED:
+                event_handler_->on_hotspot_resolved(event.key);
+                break;
+            case HotspotEvent::STRATEGY_APPLIED:
+                event_handler_->on_strategy_applied(event.key, event.strategy);
+                break;
+            default:
+                break;
+        }
     }
 }
 
 void DefaultHotspotManager::notify_hotspot_detected(const HotspotKeyInfo& hotspot) {
     HotspotEvent event;
-    event.type = HotspotEventType::HOTSPOT_DETECTED;
+    event.type = HotspotEvent::HOTSPOT_DETECTED;
     event.key = hotspot.key;
-    event.level = hotspot.hotspot_level;
+    event.level = hotspot.level;
     event.timestamp = std::chrono::system_clock::now();
-    event.description = "Hotspot detected for key: " + hotspot.key.to_string();
+    event.details = "Hotspot detected for key: " + hotspot.key.to_string();
+    
+    if (event_handler_) {
+        event_handler_->on_hotspot_detected(hotspot);
+    }
     
     add_event(event);
 }
 
 void DefaultHotspotManager::notify_hotspot_resolved(const MultiLevelKey& key) {
     HotspotEvent event;
-    event.type = HotspotEventType::HOTSPOT_RESOLVED;
+    event.type = HotspotEvent::HOTSPOT_RESOLVED;
     event.key = key;
-    event.level = HotspotLevel::NONE;
+    event.level = HotspotLevel::NORMAL;
     event.timestamp = std::chrono::system_clock::now();
-    event.description = "Hotspot resolved for key: " + key.to_string();
+    event.details = "Hotspot resolved for key: " + key.to_string();
     
     add_event(event);
 }
 
 void DefaultHotspotManager::notify_strategy_applied(const MultiLevelKey& key, HotspotStrategy strategy) {
     HotspotEvent event;
-    event.type = HotspotEventType::STRATEGY_APPLIED;
+    event.type = HotspotEvent::STRATEGY_APPLIED;
     event.key = key;
+    event.strategy = strategy;
     event.timestamp = std::chrono::system_clock::now();
-    event.description = "Strategy applied for key: " + key.to_string();
+    event.details = "Strategy applied for key: " + key.to_string();
     
     add_event(event);
 }
@@ -397,10 +430,15 @@ void DefaultHotspotManager::notify_strategy_applied(const MultiLevelKey& key, Ho
 void DefaultHotspotManager::notify_strategy_failed(const MultiLevelKey& key, HotspotStrategy strategy,
                                                   const std::string& reason) {
     HotspotEvent event;
-    event.type = HotspotEventType::STRATEGY_FAILED;
+    event.type = HotspotEvent::STRATEGY_REMOVED; // Use available enum value instead of STRATEGY_FAILED
     event.key = key;
+    event.strategy = strategy;
     event.timestamp = std::chrono::system_clock::now();
-    event.description = "Strategy failed for key: " + key.to_string() + ", reason: " + reason;
+    event.details = "Strategy failed for key: " + key.to_string() + ", reason: " + reason;
+    
+    if (event_handler_) {
+        event_handler_->on_strategy_failed(key, strategy, reason);
+    }
     
     add_event(event);
 }
@@ -410,60 +448,60 @@ namespace hotspot_utils {
 
 std::string hotspot_level_to_string(HotspotLevel level) {
     switch (level) {
-        case HotspotLevel::NONE: return "NONE";
-        case HotspotLevel::LOW: return "LOW";
-        case HotspotLevel::MEDIUM: return "MEDIUM";
-        case HotspotLevel::HIGH: return "HIGH";
+        case HotspotLevel::NORMAL: return "NORMAL";
+        case HotspotLevel::WARM: return "WARM";
+        case HotspotLevel::HOT: return "HOT";
         case HotspotLevel::CRITICAL: return "CRITICAL";
         default: return "UNKNOWN";
     }
 }
 
 HotspotLevel string_to_hotspot_level(const std::string& str) {
-    if (str == "NONE") return HotspotLevel::NONE;
-    if (str == "LOW") return HotspotLevel::LOW;
-    if (str == "MEDIUM") return HotspotLevel::MEDIUM;
-    if (str == "HIGH") return HotspotLevel::HIGH;
+    if (str == "NORMAL") return HotspotLevel::NORMAL;
+    if (str == "WARM") return HotspotLevel::WARM;
+    if (str == "HOT") return HotspotLevel::HOT;
     if (str == "CRITICAL") return HotspotLevel::CRITICAL;
-    return HotspotLevel::NONE;
+    return HotspotLevel::NORMAL;
 }
 
 std::string strategy_to_string(HotspotStrategy strategy) {
     switch (strategy) {
-        case HotspotStrategy::REPLICATE: return "REPLICATE";
-        case HotspotStrategy::PARTITION: return "PARTITION";
-        case HotspotStrategy::LOAD_BALANCE: return "LOAD_BALANCE";
-        case HotspotStrategy::THROTTLE: return "THROTTLE";
-        case HotspotStrategy::CACHE_WARMING: return "CACHE_WARMING";
+        case HotspotStrategy::REPLICATION: return "REPLICATION";
+        case HotspotStrategy::PARTITIONING: return "PARTITIONING";
+        case HotspotStrategy::CACHING: return "CACHING";
+        case HotspotStrategy::LOAD_BALANCING: return "LOAD_BALANCING";
+        case HotspotStrategy::RATE_LIMITING: return "RATE_LIMITING";
         default: return "UNKNOWN";
     }
 }
 
 HotspotStrategy string_to_strategy(const std::string& str) {
-    if (str == "REPLICATE") return HotspotStrategy::REPLICATE;
-    if (str == "PARTITION") return HotspotStrategy::PARTITION;
-    if (str == "LOAD_BALANCE") return HotspotStrategy::LOAD_BALANCE;
-    if (str == "THROTTLE") return HotspotStrategy::THROTTLE;
-    if (str == "CACHE_WARMING") return HotspotStrategy::CACHE_WARMING;
-    return HotspotStrategy::REPLICATE;
+    if (str == "REPLICATION") return HotspotStrategy::REPLICATION;
+    if (str == "PARTITIONING") return HotspotStrategy::PARTITIONING;
+    if (str == "CACHING") return HotspotStrategy::CACHING;
+    if (str == "LOAD_BALANCING") return HotspotStrategy::LOAD_BALANCING;
+    if (str == "RATE_LIMITING") return HotspotStrategy::RATE_LIMITING;
+    return HotspotStrategy::REPLICATION;
 }
 
 std::string pattern_to_string(AccessPattern pattern) {
     switch (pattern) {
-        case AccessPattern::STEADY: return "STEADY";
+        case AccessPattern::READ_HEAVY: return "READ_HEAVY";
+        case AccessPattern::WRITE_HEAVY: return "WRITE_HEAVY";
+        case AccessPattern::MIXED: return "MIXED";
         case AccessPattern::BURST: return "BURST";
         case AccessPattern::PERIODIC: return "PERIODIC";
-        case AccessPattern::GEOGRAPHIC: return "GEOGRAPHIC";
         default: return "UNKNOWN";
     }
 }
 
 AccessPattern string_to_pattern(const std::string& str) {
-    if (str == "STEADY") return AccessPattern::STEADY;
+    if (str == "READ_HEAVY") return AccessPattern::READ_HEAVY;
+    if (str == "WRITE_HEAVY") return AccessPattern::WRITE_HEAVY;
+    if (str == "MIXED") return AccessPattern::MIXED;
     if (str == "BURST") return AccessPattern::BURST;
     if (str == "PERIODIC") return AccessPattern::PERIODIC;
-    if (str == "GEOGRAPHIC") return AccessPattern::GEOGRAPHIC;
-    return AccessPattern::BURST;
+    return AccessPattern::MIXED;
 }
 
 double calculate_load_balance_factor(const std::unordered_map<NodeId, uint64_t>& node_loads) {
