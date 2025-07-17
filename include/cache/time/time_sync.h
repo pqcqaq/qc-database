@@ -4,9 +4,11 @@
 #include <memory>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <chrono>
 #include <atomic>
 #include <mutex>
+#include <shared_mutex>
 #include <functional>
 
 namespace cache {
@@ -43,6 +45,10 @@ struct HybridLogicalClock {
     
     bool operator<=(const HybridLogicalClock& other) const {
         return *this < other || *this == other;
+    }
+    
+    bool operator>=(const HybridLogicalClock& other) const {
+        return !(*this < other);
     }
     
     // 序列化

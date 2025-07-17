@@ -7,19 +7,26 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Compiler flags
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -O3 -g")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -O2 -g")
 endif()
 
 # Find required packages
 find_package(Threads REQUIRED)
-find_package(PkgConfig REQUIRED)
 
-# Third-party libraries
-find_package(Protobuf REQUIRED)
+# Try to find Protobuf and gRPC using find_package first
+find_package(Protobuf QUIET)
+find_package(gRPC QUIET)
 
-# Find gRPC using pkg-config since we installed system packages
-pkg_check_modules(GRPC REQUIRED grpc)
-pkg_check_modules(GRPCPP REQUIRED grpc++)
+# If not found, try to use system libraries directly
+if(NOT Protobuf_FOUND)
+    set(Protobuf_LIBRARIES protobuf)
+    set(Protobuf_INCLUDE_DIRS /usr/include)
+endif()
+
+if(NOT gRPC_FOUND)
+    set(GRPC_LIBRARIES grpc grpc++)
+    set(GRPC_INCLUDE_DIRS /usr/include)
+endif()
 
 # Include directories
 include_directories(${CMAKE_SOURCE_DIR}/include)
@@ -37,14 +44,13 @@ target_link_libraries(cache_server
     cache_core
     Threads::Threads
     ${GRPC_LIBRARIES}
-    ${GRPCPP_LIBRARIES}
     ${Protobuf_LIBRARIES}
 )
 
-# Add include directories for gRPC
+# Add include directories
 target_include_directories(cache_server PRIVATE
     ${GRPC_INCLUDE_DIRS}
-    ${GRPCPP_INCLUDE_DIRS}
+    ${Protobuf_INCLUDE_DIRS}
 )
 
 # Install targets

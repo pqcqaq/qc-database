@@ -18,15 +18,9 @@ target_include_directories(cache_core PUBLIC
     ${CMAKE_SOURCE_DIR}/src
 )
 
-# Make sure the crc32c header is available to the cache_core target
-target_include_directories(cache_core PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-)
-
 # Link dependencies for cache_core
 target_link_libraries(cache_core
     ${GRPC_LIBRARIES}
-    ${GRPCPP_LIBRARIES}
     ${Protobuf_LIBRARIES}
     Threads::Threads
 )
@@ -34,6 +28,5 @@ target_link_libraries(cache_core
 # Add include directories for gRPC and protobuf
 target_include_directories(cache_core PRIVATE
     ${GRPC_INCLUDE_DIRS}
-    ${GRPCPP_INCLUDE_DIRS}
     ${Protobuf_INCLUDE_DIRS}
 )
