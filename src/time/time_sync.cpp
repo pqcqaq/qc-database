@@ -235,7 +235,7 @@ Result<void> DefaultTimeService::sync_with_node(const NodeId& node_id) {
 
 Result<void> DefaultTimeService::sync_with_ntp() {
     if (!config_.enable_ntp_sync || config_.ntp_servers.empty()) {
-        return Result<void>(Status::INVALID_ARGUMENT, "NTP sync is not enabled or no servers configured");
+        return Result<void>::error(Status::INVALID_ARGUMENT, "NTP sync is not enabled or no servers configured");
     }
     
     for (const auto& server : config_.ntp_servers) {
@@ -248,7 +248,7 @@ Result<void> DefaultTimeService::sync_with_ntp() {
         }
     }
     
-    return Result<void>(Status::NETWORK_ERROR, "Failed to sync with any NTP server");
+    return Result<void>::error(Status::NETWORK_ERROR, "Failed to sync with any NTP server");
 }
 
 Result<void> DefaultTimeService::handle_sync_message(const TimeSyncMessage& message) {
@@ -268,7 +268,7 @@ Result<void> DefaultTimeService::handle_sync_message(const TimeSyncMessage& mess
             // 处理同步心跳
             break;
         default:
-            return Result<void>(Status::INVALID_ARGUMENT, "Unknown sync message type");
+            return Result<void>::error(Status::INVALID_ARGUMENT, "Unknown sync message type");
     }
     
     return Result<void>(Status::OK);
@@ -509,7 +509,7 @@ Result<ClockOffset> DefaultTimeService::berkeley_algorithm() {
     std::shared_lock<std::shared_mutex> lock(mutex_);
     
     if (node_offsets_.size() < config_.min_samples) {
-        return Result<ClockOffset>(Status::INSUFFICIENT_DATA, "Not enough offset samples");
+        return Result<ClockOffset>::error(Status::INSUFFICIENT_DATA, "Not enough offset samples");
     }
     
     // 收集所有有效的偏移样本
@@ -521,7 +521,7 @@ Result<ClockOffset> DefaultTimeService::berkeley_algorithm() {
     }
     
     if (offsets.empty()) {
-        return Result<ClockOffset>(Status::INSUFFICIENT_DATA, "No high-confidence offset samples");
+        return Result<ClockOffset>::error(Status::INSUFFICIENT_DATA, "No high-confidence offset samples");
     }
     
     // 计算中位数偏移（更鲁棒than平均值）
@@ -554,7 +554,7 @@ Result<ClockOffset> DefaultTimeService::query_ntp_server(const std::string& serv
         return Result<ClockOffset>(Status::OK, simulated_offset);
         
     } catch (const std::exception& e) {
-        return Result<ClockOffset>(Status::NETWORK_ERROR, "NTP query failed: " + std::string(e.what()));
+        return Result<ClockOffset>::error(Status::NETWORK_ERROR, "NTP query failed: " + std::string(e.what()));
     }
 }
 
@@ -694,7 +694,7 @@ Result<void> TimestampOrdering::wait_for_timestamp(const HybridLogicalClock& tar
     });
     
     if (!result) {
-        return Result<void>(Status::TIMEOUT, "Timeout waiting for timestamp");
+        return Result<void>::error(Status::TIMEOUT, "Timeout waiting for timestamp");
     }
     
     return Result<void>(Status::OK);

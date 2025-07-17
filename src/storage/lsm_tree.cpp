@@ -83,7 +83,7 @@ Result<void> LSMTreeEngine::open() {
         return Result<void>(Status::OK);
         
     } catch (const std::exception& e) {
-        return Result<void>(Status::STORAGE_ERROR, "Failed to open LSM tree: " + std::string(e.what()));
+        return Result<void>::error(Status::STORAGE_ERROR, "Failed to open LSM tree: " + std::string(e.what()));
     }
 }
 
@@ -123,7 +123,7 @@ Result<void> LSMTreeEngine::close() {
         return Result<void>(Status::OK);
         
     } catch (const std::exception& e) {
-        return Result<void>(Status::STORAGE_ERROR, "Failed to close LSM tree: " + std::string(e.what()));
+        return Result<void>::error(Status::STORAGE_ERROR, "Failed to close LSM tree: " + std::string(e.what()));
     }
 }
 
@@ -135,7 +135,7 @@ Result<DataEntry> LSMTreeEngine::get(const MultiLevelKey& key) {
     std::shared_lock<std::shared_mutex> lock(mutex_);
     
     if (!is_open_) {
-        return Result<DataEntry>(Status::STORAGE_ERROR, "LSM tree is not open");
+        return Result<DataEntry>::error(Status::STORAGE_ERROR, "LSM tree is not open");
     }
     
     total_reads_++;
@@ -162,14 +162,14 @@ Result<DataEntry> LSMTreeEngine::get(const MultiLevelKey& key) {
         return sstable_result;
     }
     
-    return Result<DataEntry>(Status::NOT_FOUND, "Key not found");
+    return Result<DataEntry>::error(Status::NOT_FOUND, "Key not found");
 }
 
 Result<void> LSMTreeEngine::put(const MultiLevelKey& key, const DataEntry& entry) {
     std::unique_lock<std::shared_mutex> lock(mutex_);
     
     if (!is_open_) {
-        return Result<void>(Status::STORAGE_ERROR, "LSM tree is not open");
+        return Result<void>::error(Status::STORAGE_ERROR, "LSM tree is not open");
     }
     
     // 写WAL
@@ -193,23 +193,22 @@ Result<void> LSMTreeEngine::put(const MultiLevelKey& key, const DataEntry& entry
     return Result<void>(Status::OK);
 }
 
-Result<void> LSMTreeEngine::put_if_version_match(const MultiLevelKey& key, 
-                                                 const DataEntry& entry, 
+Result<void> LSMTreeEngine::put_if_version_match(const MultiLevelKey& key, const DataEntry& entry, 
                                                  Version expected_version) {
     std::unique_lock<std::shared_mutex> lock(mutex_);
     
     if (!is_open_) {
-        return Result<void>(Status::STORAGE_ERROR, "LSM tree is not open");
+        return Result<void>::error(Status::STORAGE_ERROR, "LSM tree is not open");
     }
     
     // 检查当前版本
     auto current_result = get(key);
     if (current_result.is_ok()) {
         if (current_result.data.version != expected_version) {
-            return Result<void>(Status::VERSION_CONFLICT, "Version mismatch");
+            return Result<void>::error(Status::VERSION_CONFLICT, "Version mismatch");
         }
     } else if (expected_version != 0) {
-        return Result<void>(Status::VERSION_CONFLICT, "Key does not exist but expected version is not 0");
+        return Result<void>::error(Status::VERSION_CONFLICT, "Key does not exist but expected version is not 0");
     }
     
     // 创建新版本的entry
@@ -223,7 +222,7 @@ Result<void> LSMTreeEngine::remove(const MultiLevelKey& key) {
     std::unique_lock<std::shared_mutex> lock(mutex_);
     
     if (!is_open_) {
-        return Result<void>(Status::STORAGE_ERROR, "LSM tree is not open");
+        return Result<void>::error(Status::STORAGE_ERROR, "LSM tree is not open");
     }
     
     // 创建删除标记
@@ -248,17 +247,17 @@ Result<void> LSMTreeEngine::remove_if_version_match(const MultiLevelKey& key,
     std::unique_lock<std::shared_mutex> lock(mutex_);
     
     if (!is_open_) {
-        return Result<void>(Status::STORAGE_ERROR, "LSM tree is not open");
+        return Result<void>::error(Status::STORAGE_ERROR, "LSM tree is not open");
     }
     
     // 检查当前版本
     auto current_result = get(key);
     if (!current_result.is_ok()) {
-        return Result<void>(Status::NOT_FOUND, "Key not found");
+        return Result<void>::error(Status::NOT_FOUND, "Key not found");
     }
     
     if (current_result.data.version != expected_version) {
-        return Result<void>(Status::VERSION_CONFLICT, "Version mismatch");
+        return Result<void>::error(Status::VERSION_CONFLICT, "Version mismatch");
     }
     
     return remove(key);
@@ -269,7 +268,7 @@ LSMTreeEngine::range_scan(const RangeQuery& query) {
     std::shared_lock<std::shared_mutex> lock(mutex_);
     
     if (!is_open_) {
-        return Result<std::vector<std::pair<MultiLevelKey, DataEntry>>>(
+        return Result<std::vector<std::pair<MultiLevelKey, DataEntry>>>::error(
             Status::STORAGE_ERROR, "LSM tree is not open");
     }
     
@@ -357,7 +356,7 @@ Result<void> LSMTreeEngine::flush() {
     std::unique_lock<std::shared_mutex> lock(mutex_);
     
     if (!is_open_) {
-        return Result<void>(Status::STORAGE_ERROR, "LSM tree is not open");
+        return Result<void>::error(Status::STORAGE_ERROR, "LSM tree is not open");
     }
     
     // 强制刷写当前内存表
@@ -374,7 +373,7 @@ Result<void> LSMTreeEngine::compact() {
     std::unique_lock<std::shared_mutex> lock(mutex_);
     
     if (!is_open_) {
-        return Result<void>(Status::STORAGE_ERROR, "LSM tree is not open");
+        return Result<void>::error(Status::STORAGE_ERROR, "LSM tree is not open");
     }
     
     return compact_sstables();
@@ -384,7 +383,7 @@ Result<void> LSMTreeEngine::backup(const std::string& backup_path) {
     std::shared_lock<std::shared_mutex> lock(mutex_);
     
     if (!is_open_) {
-        return Result<void>(Status::STORAGE_ERROR, "LSM tree is not open");
+        return Result<void>::error(Status::STORAGE_ERROR, "LSM tree is not open");
     }
     
     try {
@@ -407,7 +406,7 @@ Result<void> LSMTreeEngine::backup(const std::string& backup_path) {
         return Result<void>(Status::OK);
         
     } catch (const std::exception& e) {
-        return Result<void>(Status::STORAGE_ERROR, "Failed to backup: " + std::string(e.what()));
+        return Result<void>::error(Status::STORAGE_ERROR, "Failed to backup: " + std::string(e.what()));
     }
 }
 
@@ -415,7 +414,7 @@ Result<void> LSMTreeEngine::restore(const std::string& backup_path) {
     std::unique_lock<std::shared_mutex> lock(mutex_);
     
     if (is_open_) {
-        return Result<void>(Status::STORAGE_ERROR, "Cannot restore while LSM tree is open");
+        return Result<void>::error(Status::STORAGE_ERROR, "Cannot restore while LSM tree is open");
     }
     
     try {
@@ -434,7 +433,7 @@ Result<void> LSMTreeEngine::restore(const std::string& backup_path) {
         return Result<void>(Status::OK);
         
     } catch (const std::exception& e) {
-        return Result<void>(Status::STORAGE_ERROR, "Failed to restore: " + std::string(e.what()));
+        return Result<void>::error(Status::STORAGE_ERROR, "Failed to restore: " + std::string(e.what()));
     }
 }
 
@@ -557,7 +556,7 @@ Result<void> LSMTreeEngine::flush_memtable() {
         return Result<void>(Status::OK);
         
     } catch (const std::exception& e) {
-        return Result<void>(Status::STORAGE_ERROR, "Failed to flush memtable: " + std::string(e.what()));
+        return Result<void>::error(Status::STORAGE_ERROR, "Failed to flush memtable: " + std::string(e.what()));
     }
 }
 
@@ -598,14 +597,14 @@ Result<void> LSMTreeEngine::compact_sstables() {
         return Result<void>(Status::OK);
         
     } catch (const std::exception& e) {
-        return Result<void>(Status::STORAGE_ERROR, "Failed to compact SSTables: " + std::string(e.what()));
+        return Result<void>::error(Status::STORAGE_ERROR, "Failed to compact SSTables: " + std::string(e.what()));
     }
 }
 
 Result<void> LSMTreeEngine::recover_from_wal() {
     auto replay_result = wal_->replay_from(0);
     if (!replay_result.is_ok()) {
-        return Result<void>(replay_result.status, replay_result.error_message);
+        return Result<void>::error(replay_result.status, replay_result.error_message);
     }
     
     // 重放WAL条目到内存表
@@ -656,7 +655,7 @@ Result<void> LSMTreeEngine::load_sstables() {
         return Result<void>(Status::OK);
         
     } catch (const std::exception& e) {
-        return Result<void>(Status::STORAGE_ERROR, "Failed to load SSTables: " + std::string(e.what()));
+        return Result<void>::error(Status::STORAGE_ERROR, "Failed to load SSTables: " + std::string(e.what()));
     }
 }
 
@@ -673,7 +672,7 @@ Result<DataEntry> LSMTreeEngine::get_from_sstables(const MultiLevelKey& key) {
         }
     }
     
-    return Result<DataEntry>(Status::NOT_FOUND, "Key not found in SSTables");
+    return Result<DataEntry>::error(Status::NOT_FOUND, "Key not found in SSTables");
 }
 
 std::string LSMTreeEngine::generate_sstable_filename() {

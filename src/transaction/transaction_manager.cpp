@@ -45,8 +45,7 @@ Result<LockId> DefaultLockManager::acquire_lock(TransactionId tx_id, const Multi
                     auto cycle = find_cycle_in_wait_graph(tx_id);
                     if (!cycle.empty()) {
                         wait_graph_[tx_id].erase(existing_lock.transaction_id);
-                        return Result<LockId>(Status::DEADLOCK_DETECTED, 
-                            "Deadlock detected involving transaction " + std::to_string(tx_id));
+                        return Result<LockId>::error(Status::DEADLOCK_DETECTED, "Deadlock detected involving transaction " + std::to_string(tx_id));
                     }
                     
                     // 等待锁释放
@@ -56,8 +55,7 @@ Result<LockId> DefaultLockManager::acquire_lock(TransactionId tx_id, const Multi
                     
                     if (std::chrono::system_clock::now() > deadline) {
                         wait_graph_[tx_id].erase(existing_lock.transaction_id);
-                        return Result<LockId>(Status::TIMEOUT, 
-                            "Lock acquisition timeout for transaction " + std::to_string(tx_id));
+                        return Result<LockId>::error(Status::TIMEOUT, "Lock acquisition timeout for transaction " + std::to_string(tx_id));
                     }
                     
                     // 重新检查
@@ -94,7 +92,7 @@ Result<void> DefaultLockManager::release_lock(const LockId& lock_id) {
     
     auto lock_it = locks_.find(lock_id);
     if (lock_it == locks_.end()) {
-        return Result<void>(Status::NOT_FOUND, "Lock not found: " + lock_id);
+        return Result<void>::error(Status::NOT_FOUND, "Lock not found: " + lock_id);
     }
     
     const auto& lock_info = lock_it->second;
@@ -218,7 +216,7 @@ std::vector<std::vector<TransactionId>> DefaultLockManager::detect_deadlocks() {
 
 Result<void> DefaultLockManager::resolve_deadlock(const std::vector<TransactionId>& deadlock_cycle) {
     if (deadlock_cycle.empty()) {
-        return Result<void>(Status::INVALID_ARGUMENT, "Empty deadlock cycle");
+        return Result<void>::error(Status::INVALID_ARGUMENT, "Empty deadlock cycle");
     }
     
     // 选择牺牲事务（这里简单选择ID最大的）
@@ -367,7 +365,7 @@ Result<TransactionId> DefaultTransactionManager::begin_transaction(IsolationLeve
     std::lock_guard<std::shared_mutex> lock(mutex_);
     
     if (!is_running_) {
-        return Result<TransactionId>(Status::SERVICE_UNAVAILABLE, "Transaction manager is not running");
+        return Result<TransactionId>::error(Status::SERVICE_UNAVAILABLE, "Transaction manager is not running");
     }
     
     TransactionId tx_id = generate_transaction_id();
@@ -399,8 +397,7 @@ Result<void> DefaultTransactionManager::commit_transaction(TransactionId tx_id) 
     DistributedTransaction& tx = tx_it->second;
     
     if (tx.state != TransactionState::ACTIVE) {
-        return Result<void>(Status::INVALID_STATE, 
-            "Transaction " + std::to_string(tx_id) + " is not in active state");
+        return Result<void>::error(Status::INVALID_STATE, "Transaction " + std::to_string(tx_id) + " is not in active state");
     }
     
     // 两阶段提交
@@ -429,7 +426,7 @@ Result<void> DefaultTransactionManager::commit_transaction(TransactionId tx_id) 
         tx.state = TransactionState::ABORTING;
         send_abort_messages(tx_id);
         transactions_.erase(tx_it);
-        return Result<void>(Status::TRANSACTION_ABORTED, "Some participants failed to prepare");
+        return Result<void>::error(Status::TRANSACTION_ABORTED, "Some participants failed to prepare");
     }
     
     // 阶段2：提交阶段
@@ -504,7 +501,7 @@ Result<DataEntry> DefaultTransactionManager::read(TransactionId tx_id, const Mul
     
     auto validate_result = validate_transaction(tx_id);
     if (!validate_result.is_ok()) {
-        return Result<DataEntry>(validate_result.status, validate_result.error_message);
+        return Result<DataEntry>::error(validate_result.status, validate_result.error_message);
     }
     
     auto tx_it = transactions_.find(tx_id);
@@ -515,7 +512,7 @@ Result<DataEntry> DefaultTransactionManager::read(TransactionId tx_id, const Mul
         auto lock_result = lock_manager_->acquire_lock(tx_id, key, LockType::SHARED, 
                                                       std::chrono::milliseconds(5000));
         if (!lock_result.is_ok()) {
-            return Result<DataEntry>(lock_result.status, lock_result.error_message);
+            return Result<DataEntry>::error(lock_result.status, lock_result.error_message);
         }
         
         tx.held_locks.insert(lock_result.data);
@@ -650,8 +647,7 @@ Result<void> DefaultTransactionManager::prepare(TransactionId tx_id) {
     DistributedTransaction& tx = tx_it->second;
     
     if (tx.state != TransactionState::ACTIVE) {
-        return Result<void>(Status::INVALID_STATE, 
-            "Transaction " + std::to_string(tx_id) + " is not in active state");
+        return Result<void>::error(Status::INVALID_STATE, "Transaction " + std::to_string(tx_id) + " is not in active state");
     }
     
     tx.state = TransactionState::PREPARED;
@@ -678,7 +674,7 @@ Result<void> DefaultTransactionManager::handle_tpc_message(const TpcMessage& mes
             handle_abort_message(message);
             break;
         default:
-            return Result<void>(Status::INVALID_ARGUMENT, "Unknown TPC message type");
+            return Result<void>::error(Status::INVALID_ARGUMENT, "Unknown TPC message type");
     }
     
     return Result<void>(Status::OK);
@@ -814,12 +810,12 @@ TransactionId DefaultTransactionManager::generate_transaction_id() {
 Result<void> DefaultTransactionManager::validate_transaction(TransactionId tx_id) const {
     auto it = transactions_.find(tx_id);
     if (it == transactions_.end()) {
-        return Result<void>(Status::NOT_FOUND, "Transaction " + std::to_string(tx_id) + " not found");
+        return Result<void>::error(Status::NOT_FOUND, "Transaction " + std::to_string(tx_id) + " not found");
     }
     
     const auto& tx = it->second;
     if (tx.is_expired()) {
-        return Result<void>(Status::TIMEOUT, "Transaction " + std::to_string(tx_id) + " has expired");
+        return Result<void>::error(Status::TIMEOUT, "Transaction " + std::to_string(tx_id) + " has expired");
     }
     
     return Result<void>(Status::OK);
@@ -866,7 +862,7 @@ Result<void> DefaultTransactionManager::rollback_transaction_operations(const Di
 Result<void> DefaultTransactionManager::send_prepare_messages(TransactionId tx_id) {
     auto tx_it = transactions_.find(tx_id);
     if (tx_it == transactions_.end()) {
-        return Result<void>(Status::NOT_FOUND, "Transaction not found");
+        return Result<void>::error(Status::NOT_FOUND, "Transaction not found");
     }
     
     const auto& tx = tx_it->second;
@@ -888,7 +884,7 @@ Result<void> DefaultTransactionManager::send_prepare_messages(TransactionId tx_i
 Result<void> DefaultTransactionManager::send_commit_messages(TransactionId tx_id) {
     auto tx_it = transactions_.find(tx_id);
     if (tx_it == transactions_.end()) {
-        return Result<void>(Status::NOT_FOUND, "Transaction not found");
+        return Result<void>::error(Status::NOT_FOUND, "Transaction not found");
     }
     
     const auto& tx = tx_it->second;
@@ -910,7 +906,7 @@ Result<void> DefaultTransactionManager::send_commit_messages(TransactionId tx_id
 Result<void> DefaultTransactionManager::send_abort_messages(TransactionId tx_id) {
     auto tx_it = transactions_.find(tx_id);
     if (tx_it == transactions_.end()) {
-        return Result<void>(Status::NOT_FOUND, "Transaction not found");
+        return Result<void>::error(Status::NOT_FOUND, "Transaction not found");
     }
     
     const auto& tx = tx_it->second;
@@ -1045,7 +1041,7 @@ TransactionContext::~TransactionContext() {
 
 Result<DataEntry> TransactionContext::read(const MultiLevelKey& key) {
     if (is_committed_ || is_aborted_) {
-        return Result<DataEntry>(Status::INVALID_STATE, "Transaction is already finished");
+        return Result<DataEntry>::error(Status::INVALID_STATE, "Transaction is already finished");
     }
     
     return manager_->read(transaction_id_, key);
@@ -1053,7 +1049,7 @@ Result<DataEntry> TransactionContext::read(const MultiLevelKey& key) {
 
 Result<void> TransactionContext::write(const MultiLevelKey& key, const DataEntry& value) {
     if (is_committed_ || is_aborted_) {
-        return Result<void>(Status::INVALID_STATE, "Transaction is already finished");
+        return Result<void>::error(Status::INVALID_STATE, "Transaction is already finished");
     }
     
     return manager_->write(transaction_id_, key, value);
@@ -1061,7 +1057,7 @@ Result<void> TransactionContext::write(const MultiLevelKey& key, const DataEntry
 
 Result<void> TransactionContext::remove(const MultiLevelKey& key) {
     if (is_committed_ || is_aborted_) {
-        return Result<void>(Status::INVALID_STATE, "Transaction is already finished");
+        return Result<void>::error(Status::INVALID_STATE, "Transaction is already finished");
     }
     
     return manager_->remove(transaction_id_, key);
@@ -1069,7 +1065,7 @@ Result<void> TransactionContext::remove(const MultiLevelKey& key) {
 
 Result<void> TransactionContext::lock(const MultiLevelKey& key, LockType type) {
     if (is_committed_ || is_aborted_) {
-        return Result<void>(Status::INVALID_STATE, "Transaction is already finished");
+        return Result<void>::error(Status::INVALID_STATE, "Transaction is already finished");
     }
     
     return manager_->lock(transaction_id_, key, type);
@@ -1077,7 +1073,7 @@ Result<void> TransactionContext::lock(const MultiLevelKey& key, LockType type) {
 
 Result<void> TransactionContext::commit() {
     if (is_committed_ || is_aborted_) {
-        return Result<void>(Status::INVALID_STATE, "Transaction is already finished");
+        return Result<void>::error(Status::INVALID_STATE, "Transaction is already finished");
     }
     
     auto result = manager_->commit_transaction(transaction_id_);
@@ -1090,7 +1086,7 @@ Result<void> TransactionContext::commit() {
 
 Result<void> TransactionContext::abort() {
     if (is_committed_ || is_aborted_) {
-        return Result<void>(Status::INVALID_STATE, "Transaction is already finished");
+        return Result<void>::error(Status::INVALID_STATE, "Transaction is already finished");
     }
     
     auto result = manager_->abort_transaction(transaction_id_);

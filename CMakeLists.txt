@@ -16,7 +16,10 @@ find_package(PkgConfig REQUIRED)
 
 # Third-party libraries
 find_package(Protobuf REQUIRED)
-find_package(gRPC CONFIG REQUIRED)
+
+# Find gRPC using pkg-config since we installed system packages
+pkg_check_modules(GRPC REQUIRED grpc)
+pkg_check_modules(GRPCPP REQUIRED grpc++)
 
 # Include directories
 include_directories(${CMAKE_SOURCE_DIR}/include)
@@ -33,6 +36,15 @@ add_executable(cache_server
 target_link_libraries(cache_server
     cache_core
     Threads::Threads
+    ${GRPC_LIBRARIES}
+    ${GRPCPP_LIBRARIES}
+    ${Protobuf_LIBRARIES}
+)
+
+# Add include directories for gRPC
+target_include_directories(cache_server PRIVATE
+    ${GRPC_INCLUDE_DIRS}
+    ${GRPCPP_INCLUDE_DIRS}
 )
 
 # Install targets

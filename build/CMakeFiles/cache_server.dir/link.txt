@@ -1,1 +1,0 @@
-/usr/bin/c++  -Wall -Wextra -O3 -g -O3 -DNDEBUG -Xlinker --dependency-file=CMakeFiles/cache_server.dir/link.d CMakeFiles/cache_server.dir/src/main.cpp.o -o cache_server  src/libcache_core.a
