@@ -125,7 +125,7 @@ services:
     depends_on:
       - prometheus
 
-  # Load balancer (HAProxy)
+# Load balancer (HAProxy)
   loadbalancer:
     image: haproxy:latest
     container_name: cache-loadbalancer
@@ -133,13 +133,14 @@ services:
       - "8080:8080"
       - "8404:8404"  # HAProxy stats
     volumes:
-      - ./config/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg
+      - ./config/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     networks:
       - cache-network
     depends_on:
       - cache-node1
       - cache-node2
       - cache-node3
+    command: ["haproxy", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
 
 networks:
   cache-network:

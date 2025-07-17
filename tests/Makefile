@@ -122,10 +122,10 @@ run-docker-tests:
 # 监控系统性能
 monitor-performance:
 	@echo "监控系统性能 (按 Ctrl+C 停止)..."
-	while true; do \
-		echo "时间: $$(date)"; \
-		echo "CPU: $$(top -bn1 | grep "Cpu(s)" | awk '{print $$2}' | cut -d'%' -f1)%"; \
-		echo "内存: $$(free | grep Mem | awk '{printf("%.1f%%", $$3/$$2 * 100.0)}')"; \
+	@while true; do \
+		echo "时间: $(date)"; \
+		echo "CPU: $(top -bn1 | grep 'Cpu(s)' | awk '{print $2}' | cut -d'%' -f1)%"; \
+		echo "内存: $(free | grep Mem | awk '{printf(\"%.1f%%\", $3/$2 * 100.0)}')"; \
 		echo "---"; \
 		sleep 5; \
 	done
@@ -133,49 +133,47 @@ monitor-performance:
 # 生成测试配置文件模板
 generate-config-template:
 	@echo "生成测试配置文件模板..."
-	@cat > test_config_template.yaml << 'EOF'
-# 分布式缓存数据库测试配置文件模板
-
-# 服务器配置
-servers:
-  - "http://localhost:8081"  # cache-node1
-  - "http://localhost:8082"  # cache-node2  
-  - "http://localhost:8083"  # cache-node3
-
-# 负载均衡器地址
-load_balancer: "http://localhost:8080"
-
-# 连接配置
-timeout: 30
-retry_count: 3
-
-# 基本测试配置
-test_duration_seconds: 60
-concurrent_clients: 10
-data_size_bytes: 1024
-key_prefix: "test"
-
-# 压力测试配置
-stress_test_ops: 10000      # 总操作数
-stress_test_threads: 50     # 并发线程数
-
-# 数据限制配置
-max_key_size: 256           # 最大键长度（字节）
-max_value_size: 4096        # 最大值长度（字节）
-
-# 性能测试配置
-performance_test:
-  warmup_seconds: 30
-  test_duration_seconds: 300
-  min_concurrent_users: 1
-  max_concurrent_users: 100
-  user_step: 10
-  read_ratio: 0.7
-  write_ratio: 0.2
-  delete_ratio: 0.1
-  target_p99_latency_ms: 100.0
-  target_min_qps: 1000.0
-EOF
+	@echo "# 分布式缓存数据库测试配置文件模板" > test_config_template.yaml
+	@echo "" >> test_config_template.yaml
+	@echo "# 服务器配置" >> test_config_template.yaml
+	@echo "servers:" >> test_config_template.yaml
+	@echo "  - \"http://localhost:8081\"  # cache-node1" >> test_config_template.yaml
+	@echo "  - \"http://localhost:8082\"  # cache-node2" >> test_config_template.yaml
+	@echo "  - \"http://localhost:8083\"  # cache-node3" >> test_config_template.yaml
+	@echo "" >> test_config_template.yaml
+	@echo "# 负载均衡器地址" >> test_config_template.yaml
+	@echo "load_balancer: \"http://localhost:8080\"" >> test_config_template.yaml
+	@echo "" >> test_config_template.yaml
+	@echo "# 连接配置" >> test_config_template.yaml
+	@echo "timeout: 30" >> test_config_template.yaml
+	@echo "retry_count: 3" >> test_config_template.yaml
+	@echo "" >> test_config_template.yaml
+	@echo "# 基本测试配置" >> test_config_template.yaml
+	@echo "test_duration_seconds: 60" >> test_config_template.yaml
+	@echo "concurrent_clients: 10" >> test_config_template.yaml
+	@echo "data_size_bytes: 1024" >> test_config_template.yaml
+	@echo "key_prefix: \"test\"" >> test_config_template.yaml
+	@echo "" >> test_config_template.yaml
+	@echo "# 压力测试配置" >> test_config_template.yaml
+	@echo "stress_test_ops: 10000      # 总操作数" >> test_config_template.yaml
+	@echo "stress_test_threads: 50     # 并发线程数" >> test_config_template.yaml
+	@echo "" >> test_config_template.yaml
+	@echo "# 数据限制配置" >> test_config_template.yaml
+	@echo "max_key_size: 256           # 最大键长度（字节）" >> test_config_template.yaml
+	@echo "max_value_size: 4096        # 最大值长度（字节）" >> test_config_template.yaml
+	@echo "" >> test_config_template.yaml
+	@echo "# 性能测试配置" >> test_config_template.yaml
+	@echo "performance_test:" >> test_config_template.yaml
+	@echo "  warmup_seconds: 30" >> test_config_template.yaml
+	@echo "  test_duration_seconds: 300" >> test_config_template.yaml
+	@echo "  min_concurrent_users: 1" >> test_config_template.yaml
+	@echo "  max_concurrent_users: 100" >> test_config_template.yaml
+	@echo "  user_step: 10" >> test_config_template.yaml
+	@echo "  read_ratio: 0.7" >> test_config_template.yaml
+	@echo "  write_ratio: 0.2" >> test_config_template.yaml
+	@echo "  delete_ratio: 0.1" >> test_config_template.yaml
+	@echo "  target_p99_latency_ms: 100.0" >> test_config_template.yaml
+	@echo "  target_min_qps: 1000.0" >> test_config_template.yaml
 	@echo "配置文件模板已生成: test_config_template.yaml"
 
 # 帮助信息
