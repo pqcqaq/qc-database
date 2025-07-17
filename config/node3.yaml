@@ -224,7 +224,7 @@ operations:
   enable_admin_api: true
   admin_api_port: 8081
   enable_health_check: true
-  health_check_port: 8082
+  health_check_port: 9083
   graceful_shutdown_timeout_ms: 30000
 
 # 示例配置覆盖（用于不同环境）
