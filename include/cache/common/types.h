@@ -92,7 +92,13 @@ enum class Status {
     STORAGE_ERROR,
     PERMISSION_DENIED,
     INVALID_ARGUMENT,
-    CLUSTER_ERROR
+    CLUSTER_ERROR,
+    ALREADY_EXISTS,
+    NOT_IMPLEMENTED,
+    SERVICE_UNAVAILABLE,
+    UNAUTHORIZED,
+    FORBIDDEN,
+    DEADLOCK_DETECTED
 };
 
 // Range query parameters
@@ -115,7 +121,32 @@ struct Result {
     
     Result(Status s = Status::OK) : status(s) {}
     Result(Status s, const T& d) : status(s), data(d) {}
-    Result(Status s, const std::string& err) : status(s), error_message(err) {}
+    
+    // Named constructor for error cases to avoid ambiguity
+    static Result error(Status s, const std::string& err) {
+        Result result(s);
+        result.error_message = err;
+        return result;
+    }
+    
+    bool is_ok() const { return status == Status::OK; }
+    bool is_error() const { return status != Status::OK; }
+};
+
+// Specialization for void
+template<>
+struct Result<void> {
+    Status status;
+    std::string error_message;
+    
+    Result(Status s = Status::OK) : status(s) {}
+    
+    // Named constructor for error cases
+    static Result error(Status s, const std::string& err) {
+        Result result(s);
+        result.error_message = err;
+        return result;
+    }
     
     bool is_ok() const { return status == Status::OK; }
     bool is_error() const { return status != Status::OK; }

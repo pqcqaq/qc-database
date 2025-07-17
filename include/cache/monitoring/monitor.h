@@ -7,6 +7,7 @@
 #include <chrono>
 #include <atomic>
 #include <functional>
+#include <shared_mutex>
 
 namespace cache {
 namespace monitoring {

@@ -8,6 +8,8 @@
 #include <functional>
 #include <atomic>
 #include <mutex>
+#include <shared_mutex>
+#include <algorithm>
 
 namespace cache {
 namespace cluster {
